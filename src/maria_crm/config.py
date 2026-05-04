@@ -20,3 +20,21 @@ def webhook_maria_leads_url() -> str | None:
 
 def crm_configured() -> bool:
     return bool(supabase_url() and supabase_service_role_key())
+
+
+def mem0_api_key() -> str | None:
+    v = os.getenv("MEM0_API_KEY", "").strip()
+    return v or None
+
+
+def mem0_configured() -> bool:
+    return bool(mem0_api_key())
+
+
+def mem0_recall_days() -> int:
+    raw = os.getenv("MARIA_MEM0_RECALL_DAYS", "15").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return 15
+    return max(1, min(n, 90))
