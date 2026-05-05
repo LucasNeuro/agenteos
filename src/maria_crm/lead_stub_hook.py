@@ -7,6 +7,7 @@ from typing import Any
 from agno.session.agent import AgentSession
 from agno.run.agent import RunOutput
 
+from .channel_context import _session_state_from_hook_kwargs
 from .lead_service import ensure_auto_contact_stub_lead
 
 
@@ -42,12 +43,18 @@ def post_ensure_maria_contact_stub_lead(
     if not _assistant_text(run_output).strip():
         return
 
+    st = session_state if isinstance(session_state, dict) else _session_state_from_hook_kwargs(kwargs)
+
     ext = (session.session_id if session is not None else None) or run_output.session_id
     phone = None
-    if isinstance(session_state, dict):
-        raw = session_state.get("telefone_whatsapp")
+    if isinstance(st, dict):
+        raw = st.get("telefone_whatsapp")
         if raw is not None:
             phone = str(raw).strip() or None
+    if not phone and ext and str(ext).startswith("wa_"):
+        digits = str(ext)[3:].strip()
+        if digits.isdigit() and len(digits) >= 10:
+            phone = digits
 
     uid = user_id or (session.user_id if session else None)
 

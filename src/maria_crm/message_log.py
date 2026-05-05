@@ -8,6 +8,7 @@ import httpx
 from agno.session.agent import AgentSession
 from agno.run.agent import RunOutput
 
+from .channel_context import _session_state_from_hook_kwargs
 from .config import crm_configured, supabase_service_role_key, supabase_url
 from .rich_logging import get_maria_logger
 
@@ -31,6 +32,38 @@ def _rest_insert(table: str, row: dict[str, Any]) -> list[dict[str, Any]]:
     r.raise_for_status()
     data = r.json()
     return data if isinstance(data, list) else [data]
+
+
+def _resolve_session_phone_channel(
+    external_id: str,
+    session_state: dict[str, Any] | None,
+) -> tuple[str | None, str]:
+    """Telefone E.164 só dígitos (ex.: 5511...) e canal ``whatsapp`` | ``agentos``."""
+    channel = "agentos"
+    phone: str | None = None
+    if isinstance(session_state, dict):
+        raw = session_state.get("telefone_whatsapp")
+        if raw is not None and str(raw).strip():
+            phone = str(raw).strip()
+        if session_state.get("origem_canal") == "WhatsApp":
+            channel = "whatsapp"
+    if phone is None and external_id.startswith("wa_"):
+        digits = external_id[3:].strip()
+        if digits.isdigit() and len(digits) >= 10:
+            phone = digits
+            channel = "whatsapp"
+    elif phone and external_id.startswith("wa_"):
+        channel = "whatsapp"
+    return phone, channel
+
+
+def _patch_session_row(session_id: str, patch: dict[str, Any]) -> None:
+    if not patch:
+        return
+    base = supabase_url().rstrip("/")
+    url = f"{base}/rest/v1/maria_sessions?id=eq.{session_id}"
+    r = httpx.patch(url, headers=_headers(), json=patch, timeout=30.0)
+    r.raise_for_status()
 
 
 def _find_session_row(external_session_id: str) -> str | None:
@@ -59,24 +92,39 @@ def _get_or_create_session_row(
     *,
     user_id: str | None,
     run_id: str | None,
+    phone: str | None,
+    channel: str,
 ) -> tuple[str, bool]:
     """Retorna (uuid interno, criou_sessão_agora)."""
     existing = _find_session_row(external_session_id)
     if existing:
+        patch: dict[str, Any] = {}
+        if phone:
+            patch["phone"] = phone
+        if channel == "whatsapp":
+            patch["channel"] = "whatsapp"
+        if patch:
+            try:
+                _patch_session_row(existing, patch)
+            except Exception:  # noqa: BLE001
+                get_maria_logger().warning(
+                    "[yellow]Maria CRM[/] falha ao actualizar phone/canal da sessão %s",
+                    existing[:8],
+                )
         return existing, False
     meta: dict[str, Any] = {}
     if user_id:
         meta["user_id"] = user_id
     if run_id:
         meta["last_run_id"] = run_id
-    inserted = _rest_insert(
-        "maria_sessions",
-        {
-            "external_session_id": external_session_id,
-            "channel": "agentos",
-            "metadata": meta,
-        },
-    )
+    row: dict[str, Any] = {
+        "external_session_id": external_session_id,
+        "channel": channel,
+        "metadata": meta,
+    }
+    if phone:
+        row["phone"] = phone
+    inserted = _rest_insert("maria_sessions", row)
     return str(inserted[0]["id"]), True
 
 
@@ -125,10 +173,16 @@ def post_log_maria_conversation_turn(
             log.warning("[yellow]Maria CRM[/] turno sem [cyan]session_id[/] — ignorado")
             return
 
+        ext_str = str(external_id)
+        st = _session_state_from_hook_kwargs(kwargs)
+        phone, channel = _resolve_session_phone_channel(ext_str, st)
+
         internal_id, created_now = _get_or_create_session_row(
-            str(external_id),
+            ext_str,
             user_id=run_output.user_id or (session.user_id if session else None),
             run_id=run_output.run_id,
+            phone=phone,
+            channel=channel,
         )
 
         meta_base: dict[str, Any] = {
