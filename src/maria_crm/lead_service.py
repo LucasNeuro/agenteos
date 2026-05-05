@@ -6,7 +6,13 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from .config import crm_configured, supabase_service_role_key, supabase_url, webhook_maria_leads_url
+from .config import (
+    auto_stub_webhook_enabled,
+    crm_configured,
+    supabase_service_role_key,
+    supabase_url,
+    webhook_maria_leads_url,
+)
 from .rich_logging import get_maria_logger
 
 LeadKind = Literal[
@@ -47,6 +53,19 @@ def _rest_insert(table: str, row: dict[str, Any]) -> list[dict[str, Any]]:
     r.raise_for_status()
     data = r.json()
     return data if isinstance(data, list) else [data]
+
+
+def _rest_get(
+    table: str,
+    *,
+    params: dict[str, str],
+) -> list[dict[str, Any]]:
+    base = supabase_url().rstrip("/")
+    url = f"{base}/rest/v1/{table}"
+    r = httpx.get(url, headers=_supabase_headers(), params=params, timeout=30.0)
+    r.raise_for_status()
+    data = r.json()
+    return data if isinstance(data, list) else []
 
 
 def _build_card_payload(
@@ -269,3 +288,149 @@ def _patch_lead_webhook_status(
         patch["webhook_sent_at"] = datetime.now(timezone.utc).isoformat()
     r = httpx.patch(url, headers=_supabase_headers(), json=patch, timeout=30.0)
     r.raise_for_status()
+
+
+_AUTO_STUB_TAG = "[AUTO_STUB]"
+
+
+def ensure_auto_contact_stub_lead(
+    *,
+    source_external_session_id: str | None,
+    telefone: str | None,
+    user_id: str | None,
+) -> None:
+    """
+    Garante **um** lead mínimo por sessão AgentOS / contacto quando a Mari responde mas a tool
+    `registrar_lead_no_crm` **não** foi chamada — assim o contacto fica no CRM mesmo se o utilizador
+    nunca mais responder.
+
+    Deduplica por `source_external_session_id` (coluna da migração `002_maria_lead_source_session.sql`)
+    ou, em último caso, por prefixo `uid:` + user_id.
+    """
+    log = get_maria_logger()
+    if not crm_configured():
+        return
+
+    dedupe_key = (source_external_session_id or "").strip()
+    if not dedupe_key and user_id:
+        dedupe_key = f"uid:{user_id.strip()}"
+    if not dedupe_key:
+        log.debug("[dim]Maria CRM stub[/] sem session/user — ignorado")
+        return
+
+    try:
+        existing = _rest_get(
+            "maria_leads",
+            params={
+                "source_external_session_id": f"eq.{dedupe_key}",
+                "select": "id",
+                "limit": "1",
+            },
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning(
+            "[yellow]Maria CRM stub[/] não foi possível consultar leads — a migração 002 está aplicada? %s",
+            e,
+        )
+        return
+
+    if existing:
+        return
+
+    tel = (telefone or "").strip()
+    if not tel:
+        tel = "Não informado"
+
+    resumo = (
+        "Contato registrado automaticamente após primeira (ou seguinte) resposta da Mari. "
+        "Qualificação incompleta ou interlocutor pode não ter respondido de novo — fazer follow-up humano se necessário."
+    )
+    justificativa = (
+        "Registo mínimo obrigatório por sessão; sem conclusão de fluxo nem chamada à tool de lead pelo modelo."
+    )
+    card = _build_card_payload(
+        nome="Não informado",
+        telefone=tel,
+        email="Não informado",
+        servico_solicitado="Mercado Imobiliário — registro automático de contato (stub)",
+        dados_imovel={
+            "tipo": "Não informado",
+            "tamanho": "Não informado",
+            "bairro_regiao": "Não informado",
+            "prazo": "Não informado",
+        },
+        resumo_necessidade=resumo,
+        potencial="BAIXO",
+        potencial_justificativa=justificativa,
+        caracteristicas_adicionais=f"{_AUTO_STUB_TAG} Sessão {dedupe_key}. user_id={user_id or '—'}",
+    )
+    card["mari_auto_contact_stub"] = True
+    card["source_external_session_id"] = dedupe_key
+
+    car_extra = f"{_AUTO_STUB_TAG} external_session={dedupe_key}" + (f" user_id={user_id}" if user_id else "")
+
+    lead_row: dict[str, Any] = {
+        "lead_kind": "cliente_imobiliario",
+        "nome": "Não informado",
+        "telefone": tel if tel != "Não informado" else None,
+        "email": "Não informado",
+        "servico_solicitado": "Mercado Imobiliário — stub contato",
+        "dados_imovel": {
+            "tipo": "Não informado",
+            "tamanho": "Não informado",
+            "bairro_regiao": "Não informado",
+            "prazo": "Não informado",
+        },
+        "resumo_necessidade": resumo,
+        "potencial": "BAIXO",
+        "potencial_justificativa": justificativa,
+        "caracteristicas_adicionais": car_extra,
+        "webhook_payload": card,
+        "session_id": None,
+        "source_external_session_id": dedupe_key,
+    }
+
+    try:
+        inserted = _rest_insert("maria_leads", lead_row)
+    except Exception as e:  # noqa: BLE001
+        log.warning(
+            "[yellow]Maria CRM stub[/] falha ao inserir — aplica `002_maria_lead_source_session.sql` no Supabase? %s",
+            e,
+        )
+        return
+
+    lead_id = inserted[0]["id"]
+    detail = {
+        "lead_id": lead_id,
+        "modo": None,
+        "intencao": "contato_auto_stub",
+        "tipo_imovel_resumo": None,
+        "bairro_regiao": None,
+        "prazo_necessidade": None,
+    }
+    try:
+        _rest_insert("maria_lead_cliente_imobiliario", detail)
+    except Exception as e:  # noqa: BLE001
+        log.warning("[yellow]Maria CRM stub[/] lead criado mas detalhe falhou — %s", e)
+
+    send_wh = webhook_maria_leads_url() and auto_stub_webhook_enabled()
+    if send_wh:
+        try:
+            wr = httpx.post(
+                webhook_maria_leads_url() or "",
+                headers={"Content-Type": "application/json"},
+                json=card,
+                timeout=45.0,
+            )
+            wr.raise_for_status()
+            _patch_lead_webhook_status(lead_id, wr.status_code, None, sent_ok=True)
+        except Exception as e:  # noqa: BLE001
+            _patch_lead_webhook_status(lead_id, None, str(e)[:500], sent_ok=False)
+            log.warning("[yellow]Maria CRM stub[/] webhook opcional falhou — %s", e)
+    else:
+        log.info(
+            "[bold cyan]Maria CRM · stub[/] lead id=[cyan]%s[/] sessão=[dim]%s[/] — "
+            "webhook só com MARIA_AUTO_STUB_WEBHOOK=1",
+            lead_id,
+            dedupe_key[:48],
+        )

@@ -1,4 +1,4 @@
-# Agno + Mistral (MISTRAL_API_KEY). OpenAI não é necessário para este projeto.
+# Agno + Mistral (MISTRAL_API_KEY) — sem OpenAI neste projeto.
 
 agno>=2.3.13
 

@@ -29,12 +29,14 @@ def registrar_lead_no_crm(
 ) -> str:
     """
     Regista o lead no mini CRM (Supabase) e envia o cartão JSON ao webhook se configurado.
-    Chama **uma vez** quando a qualificação do fluxo estiver completa ou o cliente confirmar encaminhamento.
 
-    - **lead_kind** (obrigatório): `cliente_imobiliario` | `cliente_projetos` | `prestador_servico` | `imobiliaria_corretor`
-    - **potencial** (obrigatório): `ALTO` | `MEDIO` | `BAIXO`
-    - Preenche **tipo_imovel**, **tamanho_imovel**, **bairro_regiao**, **prazo** quando existirem na conversa; senão use vazio (grava como "Não informado" nos dados_imovel).
-    - Campos **modo_imobiliario** (rapido/detalhado), **intencao_imobiliario**, etc. só quando aplicável ao fluxo.
+    **Obrigatório ao encerrar** um fluxo útil (POP): chamar **neste turno** após encaminhamento ao humano/corretor
+    ou após qualificação mínima — mesmo com dados parciais (usa "Não informado"). Um registo por fluxo encerrado,
+    salvo correção explícita do cliente. Em WhatsApp, quando o estado de sessão traz **telefone_whatsapp**, usa-o em **telefone**.
+
+    - **lead_kind**: `cliente_imobiliario` | `cliente_projetos` | `prestador_servico` | `imobiliaria_corretor`
+    - **potencial**: `ALTO` | `MEDIO` | `BAIXO`
+    - **intencao_imobiliario** / **modo_imobiliario** para mercado imobiliário conforme playbook.
     """
     return persist_lead_and_webhook(
         lead_kind,  # type: ignore[arg-type]

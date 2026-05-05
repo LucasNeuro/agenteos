@@ -44,19 +44,19 @@ Copia de [`../.env.example`](../.env.example).
 O ficheiro [`src/agent_app.py`](../src/agent_app.py) define:
 
 - **Modelo:** string `mistral:...` (por defeito `mistral:mistral-large-latest`).
-**Playbooks em Markdown:** pasta [`docs/playbooks/`](../docs/playbooks/) — ficheiros `00_router.md`, `01_*.md` … são carregados por [`src/playbook_loader.py`](../src/playbook_loader.py) no arranque. Edita os `.md` para afinar fluxos sem mexer em código.
+**Playbooks (POP Mercado Imobiliário):** [`docs/playbooks/`](../docs/playbooks/) — **três** ficheiros ativos (`00_mari_persona_global.md`, `00_mari_mercado_imobiliario_core.md`, `01_mari_mercado_imobiliario_fluxos.md`), carregados por ordem em [`src/playbook_loader.py`](../src/playbook_loader.py). Outros `.md` estão em `docs/playbooks/arquivo/` e não entram no prompt.
 - `SqliteDb` em `tmp/agentos.db` (sessões e histórico locais).
 - `timezone_identifier` América/São Paulo; histórico alargado para o modelo não repetir nome/e-mail.
 - `AgentOS` com `tracing=True` à volta da mesma base.
 
-- Tool **`registrar_lead_no_crm`**: grava lead no **Supabase** (aplica primeiro [`supabase/migrations/001_maria_mini_crm.sql`](../supabase/migrations/001_maria_mini_crm.sql)) e envia **POST** JSON para `WEBHOOK_MARIA_LEADS_URL` se definido.
+- **Memória Agno:** só **Mistral**. Usa-se **memória agentica** (`enable_agentic_memory=True`): a Mari tem a ferramenta `update_user_memory` e deve usá‑la quando o utilizador der factos estáveis (nome, preferências, etc.). O painel **Memory** lê `agno_memories` no SQLite (`tmp/agentos.db`). **Sem OpenAI** neste agente.
+- **Mem0 (nuvem):** com **`MEM0_API_KEY`** definida, a integração Mem0 **liga-se** (uso típico em produção com WhatsApp). Para desligar: `MARIA_USE_MEM0=0`. O arquivo automático de turnos usa por omissão **`infer=False`** no API Mem0 (mais linhas visíveis no dashboard); `MARIA_MEM0_APPEND_INFER=1` recupera o modo com inferência. Convive com **memória agentica** no Agno (`update_user_memory` + Mem0).
 
-**Gravação Supabase:** cada resposta do Agent corre o `post_hook` `post_log_maria_conversation_turn`, que preenche **`maria_sessions`** e **`maria_messages`**. Os **`maria_leads`** só aparecem quando o modelo invoca **`registrar_lead_no_crm`** no fim da qualificação.
+- Tool **`registrar_lead_no_crm`**: grava lead no **Supabase** (aplica [`001_maria_mini_crm.sql`](../supabase/migrations/001_maria_mini_crm.sql) e depois [`002_maria_lead_source_session.sql`](../supabase/migrations/002_maria_lead_source_session.sql) para stubs por sessão) e envia **POST** JSON para `WEBHOOK_MARIA_LEADS_URL` quando definido (stubs automáticos só disparam webhook se `MARIA_AUTO_STUB_WEBHOOK=1`).
 
-**Ainda por fazer:** UAZ WhatsApp, agenda real.
+**Gravação Supabase:** cada resposta corre `post_log_maria_conversation_turn` (**`maria_sessions`**, **`maria_messages`**). **`maria_leads`:** lead completo via tool **ou** stub automático por sessão (ver `post_ensure_maria_contact_stub_lead`).
 
-**Fora de escopo nesta fase:** UAZ, calendário, transcrição de áudio.
-
+**Próximo passo WhatsApp:** orquestrar webhook UAZ → run do agente com `user_id`/`session_id` estáveis (ver Fase 6b no fim deste guia e `src/maria_crm/uazapi_ids.py`).
 ---
 
 ## Fase 3 — Correr o runtime local
@@ -85,7 +85,7 @@ Documentação Agno: [What is AgentOS?](https://docs.agno.com/agent-os/introduct
 
 ## Fase 5 — Afinar fluxo (ainda local)
 
-- O playbook em `docs/playbooks/` já cobre os fluxos; ajusta os `.md` quando o produto mudar.
+- Ajusta persona + playbooks POP em `docs/playbooks/` quando o produto mudar (módulos antigos em `arquivo/`).
 
 ---
 
@@ -93,14 +93,46 @@ Documentação Agno: [What is AgentOS?](https://docs.agno.com/agent-os/introduct
 
 - Tool `POST` com o JSON de lead (§8 de `maria.md`).
 - Tool de agenda (apenas com API/calendário real).
-- Tools UAZ (`/send/text`, `/send/menu`, …) depois de existir webhook de entrada estável.
+- Resposta WhatsApp: implementado em **`POST /webhooks/uazapi`** + UAZ `POST /send/text` ou `/send/menu` (ver Fase 6b).
 
 ---
 
-## Fase 7 — WhatsApp e deploy
+## Fase 6b — UAZAPI ↔ Maria (contrato técnico)
 
-- Instância UAZ: token, webhook HTTPS para o teu backend.
-- Deploy (ex.: Render): serviço com uptime adequado a webhooks; **Postgres** se precisares de persistência forte (evitar SQLite só em disco efémero).
+OpenAPI: [`docs/uazapi-openapi-spec (12).yaml`](../docs/uazapi-openapi-spec%20(12).yaml). Código: [`src/maria_crm/uazapi_ids.py`](../src/maria_crm/uazapi_ids.py), [`src/maria_crm/uazapi_webhook.py`](../src/maria_crm/uazapi_webhook.py).
+
+1. **Webhook HTTP** implementado na app FastAPI: **`POST /webhooks/uazapi`** (corpo JSON estilo `WebhookEvent` com `event` + `data`, ou objeto mensagem “flat” com `chatid`/`text`). Recomendação: **subir primeiro no Render** (HTTPS público), depois registar na UAZAPI `https://<teu-serviço>.onrender.com/webhooks/uazapi`.
+2. **Evitar loop**: na configuração do webhook UAZ, usar `"excludeMessages": ["wasSentByApi"]`. O handler ignora `fromMe` e grupos.
+3. **`user_id` / `session_id`**: `maria_user_id_from_uaz_message` / `uaz_session_id_for_maria` → `wa_<só dígitos>` (alinhado a Mem0 + CRM + `telefone_whatsapp` no estado de sessão).
+4. **`UAZAPI_TOKEN`** (header `token`) e opcionalmente **`UAZAPI_BASE_URL`** (padrão `https://free.uazapi.com`). Resposta: **`POST /send/text`** ou, se a Mari incluir o bloco `<<<UAZ_BUTTONS>>>...<<<END_UAZ_BUTTONS>>>`, **`POST /send/menu`** com `type: "button"` (até 3 opções — ver playbook de fluxos).
+5. **Segurança opcional**: define `UAZAPI_WEBHOOK_SECRET` e envia o mesmo valor no header **`X-Maria-Webhook-Secret`** (podes configurar header personalizado na UAZ, se disponível).
+
+Mem0 e Supabase usam o mesmo `user_id`/`session_id` definidos no `hub_agent.run(...)` dentro do webhook.
+
+---
+
+## Fase 7 — Deploy no Render + WhatsApp (UAZAPI)
+
+**Ordem recomendada:** (1) **Web Service no Render** com `MISTRAL_API_KEY`, `UAZAPI_TOKEN`, CRM/Mem0 conforme precisares; (2) copiar a URL pública `https://…onrender.com/webhooks/uazapi`; (3) na UAZAPI, apontar o webhook para essa URL com `excludeMessages` adequados.
+
+Blueprint opcional: [`render.yaml`](../render.yaml) na raiz do repositório (ajusta `region` / `plan` no painel Render).
+
+### Render (Web Service)
+1. **Root:** raiz do repositório; **Runtime** Python 3.11 (ou a versão que usares localmente).
+2. **Build:** `pip install -r requirements.txt`
+3. **Start:**  
+   `uvicorn src.agent_app:app --host 0.0.0.0 --port $PORT`  
+   (no Render, `PORT` vem do ambiente.)
+4. **Variáveis de ambiente** (mínimo para produção):  
+   `MISTRAL_API_KEY`, `UAZAPI_TOKEN`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `MEM0_API_KEY`,  
+   `WEBHOOK_MARIA_LEADS_URL` (se usares n8n), e opcionalmente `UAZAPI_BASE_URL`, `UAZAPI_WEBHOOK_SECRET`, `MARIA_MEM0_RECALL_DAYS`, `MARIA_AUTO_STUB_WEBHOOK`, `MARIA_MEM0_APPEND_INFER`.
+5. **Persistência:** o `SqliteDb` do Agno usa `tmp/agentos.db` por defeito — em instâncias **efémeras** podes perder sessões ao reiniciar. Para produção séria: migrar o `SqliteDb` para caminho em **Render Disk** ou usar **Postgres** como BD do Agno (ver documentação Agno). Mem0 (nuvem) continua a guardar factos por `user_id` mesmo que o SQLite seja reiniciado.
+6. **URL pública HTTPS:** necessária para o **webhook UAZAPI** (`POST /webhooks/uazapi` na mesma app).
+
+### WhatsApp (UAZAPI) após o deploy
+1. Webhook UAZ → **`https://<teu-serviço>.onrender.com/webhooks/uazapi`** (eventos de mensagem). Usar `excludeMessages` como na Fase 6b.
+2. **`UAZAPI_TOKEN`** da instância igual ao definido no Render (envio `POST /send/text` e `/send/menu`).
+3. Botões interativos: a Mari pode incluir o bloco documentado no playbook (`<<<UAZ_BUTTONS>>>` … `<<<END_UAZ_BUTTONS>>>`); o backend chama automaticamente **`POST /send/menu`** com `type: "button"` (máx. 3 opções por mensagem).
 
 ---
 

@@ -18,7 +18,7 @@ from agno.tools.mem0 import Mem0Tools
 
 from mem0.client.main import MemoryClient
 
-from .config import mem0_api_key, mem0_configured, mem0_recall_days
+from .config import mem0_api_key, mem0_append_infer, mem0_configured, mem0_recall_days
 from .rich_logging import get_maria_logger
 
 
@@ -179,14 +179,64 @@ def maria_mem0_pre_hook(
     *,
     session_state: dict[str, Any],
     user_id: str | None = None,
+    session: AgentSession | None = None,
     **kwargs: Any,
 ) -> None:
-    maria_mem0_load_recent_into_session(session_state, user_id)
+    uid = resolve_maria_mem0_user_id(
+        hook_user_id=user_id,
+        session=session,
+        session_state=session_state,
+    )
+    maria_mem0_load_recent_into_session(session_state, uid)
+
+
+def resolve_maria_mem0_user_id(
+    *,
+    hook_user_id: str | None = None,
+    run_output: RunOutput | None = None,
+    session: AgentSession | None = None,
+    session_state: dict[str, Any] | None = None,
+) -> str | None:
+    """
+    Identificador estável para o Mem0 (filtro ``user_id``).
+
+    O AgentOS / playground por vezes não preenche ``user_id``; nesse caso usa-se
+    ``session.session_id`` para não perder gravações no painel Mem0.
+    """
+    ro_state = getattr(run_output, "session_state", None) if run_output else None
+    for candidate in (
+        hook_user_id,
+        getattr(run_output, "user_id", None) if run_output else None,
+        session.user_id if session else None,
+        (session_state or {}).get("current_user_id"),
+        ro_state.get("current_user_id") if isinstance(ro_state, dict) else None,
+    ):
+        if candidate is not None and str(candidate).strip():
+            return str(candidate).strip()
+    if session is not None:
+        sid = getattr(session, "session_id", None)
+        if sid is not None and str(sid).strip():
+            return str(sid).strip()
+    return None
+
+
+def _count_mem0_add_results(payload: Any) -> int | None:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("results", "memories", "items", "data"):
+        v = payload.get(key)
+        if isinstance(v, list):
+            return len(v)
+    if payload.get("id") or payload.get("memory_id"):
+        return 1
+    return None
 
 
 def maria_mem0_post_append_turn(
     run_output: RunOutput,
     session: AgentSession,
+    user_id: str | None = None,
+    session_state: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> None:
     """
@@ -195,8 +245,17 @@ def maria_mem0_post_append_turn(
     log = get_maria_logger()
     if not mem0_configured():
         return
-    uid = run_output.user_id or (session.user_id if session else None)
+    uid = resolve_maria_mem0_user_id(
+        hook_user_id=user_id,
+        run_output=run_output,
+        session=session,
+        session_state=session_state,
+    )
     if not uid:
+        log.warning(
+            "[yellow]Maria Mem0[/] turno não enviado — falta [cyan]user_id[/] no hook "
+            "(confirma que o cliente AgentOS envia [dim]user_id[/] no run)."
+        )
         return
     user_text = ""
     if run_output.input is not None:
@@ -216,11 +275,23 @@ def maria_mem0_post_append_turn(
         return
     try:
         client = MemoryClient(api_key=key)
-        client.add(
+        result = client.add(
             [{"role": "user", "content": blob}],
             filters=_filters_for_user(str(uid)),
-            infer=True,
+            infer=mem0_append_infer(),
         )
-        log.debug("[dim]Maria Mem0[/] turno gravado · user=[cyan]%s[/]", str(uid)[:24])
+        n = _count_mem0_add_results(result)
+        log.info(
+            "[bold green]Maria Mem0 ✓[/] turno enviado · user=[cyan]%s[/] · "
+            "itens_na_resposta_add=%s",
+            str(uid)[:48],
+            n if n is not None else "?",
+        )
+        if n == 0:
+            log.debug(
+                "Maria Mem0: add devolveu 0 resultados visíveis (Mem0 pode fundir ou adiar inferência). "
+                "Corpo: %s",
+                json.dumps(result, default=str)[:900],
+            )
     except Exception as e:  # noqa: BLE001
         log.warning("[yellow]Maria Mem0[/] falha ao gravar turno — %s", e)

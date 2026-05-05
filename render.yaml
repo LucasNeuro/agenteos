@@ -1,0 +1,10 @@
+# Blueprint Render — https://render.com/docs/blueprint-spec
+# Variáveis sensíveis no painel Render: MISTRAL_API_KEY, SUPABASE_*, MEM0_API_KEY, WEBHOOK_*, etc.
+
+services:
+  - type: web
+    name: agenteos-maria
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn src.agent_app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
