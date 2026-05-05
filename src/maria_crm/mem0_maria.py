@@ -47,7 +47,8 @@ def _flatten_get_all_results(payload: Any) -> list[dict[str, Any]]:
 
 class MariaMem0Tools(Mem0Tools):
     """
-    Idêntico ao Mem0Tools, mas compatível com MemoryClient v3 (filters em vez de user_id solto).
+    Mem0Tools com ``get_all``/``search``/``delete_all`` em filtros v3;
+    o ``add`` da API v3 usa ``user_id`` ao nível raiz (como o Agno base) — não misturar com ``filters`` no add.
     """
 
     def add_memory(
@@ -66,7 +67,6 @@ class MariaMem0Tools(Mem0Tools):
             messages_list = [{"role": "user", "content": content}]
             result = self.client.add(
                 messages_list,
-                filters=_filters_for_user(resolved_user_id),
                 user_id=str(resolved_user_id),
                 infer=self.infer,
             )
@@ -276,9 +276,9 @@ def maria_mem0_post_append_turn(
         return
     try:
         client = MemoryClient(api_key=key)
+        # POST /v3/memories/add/ — entidade em ``user_id`` no corpo; ``filters`` aqui costuma impedir contagem/persistência no dashboard.
         result = client.add(
             [{"role": "user", "content": blob}],
-            filters=_filters_for_user(str(uid)),
             user_id=str(uid),
             infer=mem0_append_infer(),
         )
@@ -290,10 +290,11 @@ def maria_mem0_post_append_turn(
             n if n is not None else "?",
         )
         if n == 0:
-            log.debug(
-                "Maria Mem0: add devolveu 0 resultados visíveis (Mem0 pode fundir ou adiar inferência). "
-                "Corpo: %s",
-                json.dumps(result, default=str)[:900],
+            log.info(
+                "Maria Mem0: resposta add sem lista de itens (infer=%s). "
+                "Confirma no dashboard Mem0; com `MARIA_MEM0_APPEND_INFER=1` a extração explícita costuma aparecer como mais factos.",
+                mem0_append_infer(),
             )
+            log.debug("Maria Mem0 add corpo: %s", json.dumps(result, default=str)[:900])
     except Exception as e:  # noqa: BLE001
         log.warning("[yellow]Maria Mem0[/] falha ao gravar turno — %s", e)
