@@ -110,20 +110,18 @@ def ingest_guardrails_from_storage(
     return n
 
 
-def main() -> None:
+def run_maria_knowledge_ingest_from_env() -> int:
+    """
+    Executa ingest conforme `MARIA_KNOWLEDGE_INGEST_MODE` (local ou storage).
+    Usado pelo CLI e pelo webhook de produção; não carrega `.env` (usa só variáveis do processo).
+    Devolve número de ficheiros processados.
+    """
     setup_maria_rich_logging()
-    try:
-        from dotenv import load_dotenv
-    except ImportError:
-        load_dotenv = None  # type: ignore[misc, assignment]
-    if load_dotenv:
-        load_dotenv(_project_root() / ".env")
-
     mode = maria_knowledge_ingest_mode()
     if mode == "storage":
         n = ingest_guardrails_from_storage()
         get_maria_logger().info("[bold]Ingestão concluída[/] (storage): %s ficheiro(s).", n)
-        return
+        return n
 
     raw_dir = os.getenv("MARIA_KNOWLEDGE_INGEST_DIR", "docs/maria_guardrails").strip()
     root = Path(raw_dir)
@@ -132,6 +130,18 @@ def main() -> None:
 
     n = ingest_guardrails_dir(root)
     get_maria_logger().info("[bold]Ingestão concluída[/] (local): %s ficheiro(s).", n)
+    return n
+
+
+def main() -> None:
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        load_dotenv = None  # type: ignore[misc, assignment]
+    if load_dotenv:
+        load_dotenv(_project_root() / ".env")
+
+    run_maria_knowledge_ingest_from_env()
 
 
 if __name__ == "__main__":
