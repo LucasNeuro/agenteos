@@ -1,6 +1,6 @@
 # Historico de Trabalho - Mari (AgentOS + WhatsApp/UAZAPI)
 
-Ultima atualizacao: 2026-05-05 17:37 (UTC-3)
+Ultima atualizacao: 2026-05-05 17:39 (UTC-3)
 
 ## Objetivo deste arquivo
 - Registrar o que foi feito por dia e horario.
@@ -70,6 +70,17 @@ Ultima atualizacao: 2026-05-05 17:37 (UTC-3)
 ## Registro automatico (CI)
 
 Esta secao e gerada automaticamente pelo GitHub Actions. Cada entrada resume **o que mudou no codigo** em linguagem simples. Para testes no Render (botoes, logs WhatsApp), continue a acrescentar notas manualmente na secao do dia acima.
+
+
+### 2026-05-05 17:39 (UTC-3) - Atividade no repositorio
+
+- **Para nao tecnicos:** Novo codigo foi enviado (push) para o repositorio. Isto significa que ha alteracoes guardadas no historico do projeto.
+- **Branch:** `main`
+- **Commit:** `11a265a` (11a265a2dc1d...) - Add GitHub Actions workflow for static site deployment
+- **Quem:** LucasNeuro
+- **Detalhe tecnico (CI):** https://github.com/LucasNeuro/agenteos/actions/runs/25401027478
+- **Ficheiros alterados neste envio:**
+  - `.github/workflows/static.yml`
 
 
 ### 2026-05-05 17:37 (UTC-3) - Atividade no repositorio
