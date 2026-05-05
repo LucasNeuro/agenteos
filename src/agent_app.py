@@ -97,7 +97,6 @@ agent_os = AgentOS(
     name="hub-obra-agentos",
     agents=[hub_agent],
     tracing=True,
-    tracing_db=db,
 )
 
 app = agent_os.get_app()
