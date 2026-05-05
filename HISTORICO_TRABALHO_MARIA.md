@@ -1,13 +1,35 @@
 # Historico de Trabalho - Mari (AgentOS + WhatsApp/UAZAPI)
 
-Ultima atualizacao: 2026-05-05 17:23 (UTC-3)
+Ultima atualizacao: 2026-05-05 (UTC-3)
+
+## Em linguagem simples (evolucao para leigos)
+
+Resumo para quem nao programa: o que mudou em relacao a **Mari**, ao **WhatsApp** e ao **projeto**. Acrescentar uma subsecção `### ...` por **dia** em que houver algo relevante (exemplos abaixo: 4 e 5 de maio de 2026).
+
+### Segunda-feira, 4 de maio de 2026
+
+- Foi criado o **repositorio** do projeto no GitHub com a primeira versao do codigo.
+- Comecou a **ligacao com a Mem0**: servico de memoria para a Mari **lembrar** informacoes do cliente ao longo do tempo (entre conversas).
+- A **estrutura da documentacao** do negocio (**mercado imobiliario / Obra 10+**) e guias de ambiente foram organizadas; preparou-se a **integracao com o WhatsApp** via provedor **UAZAPI** (mensagens a entrar e sair pelo numero da empresa).
+
+### Terca-feira, 5 de maio de 2026
+
+- **WhatsApp:** o sistema passou a tratar melhor os **avisos** que chegam da UAZAPI (formatos diferentes do webhook) para a Mari **nao deixar de responder**.
+- **Botoes e listas:** quando a pergunta e de escolha (por exemplo: buscar imovel, anunciar, corretor), a Mari pode enviar **botoes** ou **menu em lista** no WhatsApp, e nao so texto corrido; foram reforcadas as **instrucoes internas** (playbooks) para isso acontecer com mais constancia.
+- **Citacao da mensagem:** explicou-se que, se a resposta aparece como "resposta citada" no telemovel, isso vem de uma **opcao de configuracao** no servidor (Render); desligando essa opcao, a mensagem volta ao formato de **bolha normal**.
+- **Memoria e registo:** melhorias na forma como o **telefone** do WhatsApp e a **memoria Mem0** entram na conversa, e afinacoes nos **logs** para perceber se a Mari enviou texto, botoes ou lista.
+- **Relatorio no GitHub:** experimentou-se atualizar este historico e pagina publica **por automatismo**; **nao ficou em uso.** O acordo actual e **comunicar o andamento no grupo manualmente**. O detalhe tecnico do dia 5 continua abaixo para a equipa.
 
 ## Objetivo deste arquivo
+- Este ficheiro e o **relatorio oficial** do trabalho na **agente Mari** (codigo, playbooks, integracao WhatsApp, CRM, memoria, deploy). Trata-se tambem do registo que a equipa pode partilhar com **nao tecnicos**, quando fizer sentido.
+- **Regra:** apos cada entrega ou correcao relevante na Mari, **actualizar aqui** no mesmo dia (ou no proximo dia util): subir a linha **Ultima atualizacao**, acrescentar bullets em **Em linguagem simples** se houver audiencia leiga, e o pormenor tecnico na seccao do **dia**.
+- **Em producao (Render):** o mesmo ficheiro e servido em HTML na rota **`/relatorio`** da app (ex.: `https://<servico>.onrender.com/relatorio`). A pagina le o Markdown no servidor a cada visita; **apos editar este ficheiro e fazer deploy**, o site mostra a versao nova.
 - Registrar o que foi feito por dia e horario.
 - Manter um diario tecnico curto de evolucao do projeto.
 - Facilitar acompanhamento por conversa, codigo e commits.
 
 ## Como atualizar (padrao)
+- Actualizar **Ultima atualizacao** no topo com a data (e hora, se quiser).
 - Abrir um bloco novo por data: `## YYYY-MM-DD (Dia)`.
 - Dentro do dia, adicionar entradas por horario: `### HH:MM`.
 - Em cada entrada, registrar:
@@ -15,8 +37,6 @@ Ultima atualizacao: 2026-05-05 17:23 (UTC-3)
   - mudancas feitas;
   - validacao realizada;
   - proximo passo.
-- A secao **Registro automatico (CI)** e preenchida pelo **GitHub Actions** a cada push na branch **main** (linguagem simples + lista de ficheiros). Em Pull Requests o mesmo texto aparece so no log do CI (preview), sem alterar o ficheiro no PR.
-- **Leitura publica no browser (amigavel para nao tecnicos):** o workflow `Pages - Historico publico` gera um site a partir deste ficheiro. Apos a primeira configuracao em **Settings - Pages** (source: **GitHub Actions**), o URL aparece nessa pagina (tipicamente `https://<don>.github.io/<repo>/`).
 
 ---
 
@@ -66,23 +86,6 @@ Ultima atualizacao: 2026-05-05 17:23 (UTC-3)
 - Decisao do projeto: manter contexto o mais rico possivel.
 
 ---
-
-## Registro automatico (CI)
-
-Esta secao e gerada automaticamente pelo GitHub Actions. Cada entrada resume **o que mudou no codigo** em linguagem simples. Para testes no Render (botoes, logs WhatsApp), continue a acrescentar notas manualmente na secao do dia acima.
-
-
-### 2026-05-05 17:23 (UTC-3) - Atividade no repositorio
-
-- **Para nao tecnicos:** Novo codigo foi enviado (push) para o repositorio. Isto significa que ha alteracoes guardadas no historico do projeto.
-- **Branch:** `main`
-- **Commit:** `1f61082` (1f6108238fe0...) - Add automated update for HISTORICO_TRABALHO_MARIA.md and CI workflow
-- **Quem:** LucasNeuro
-- **Detalhe tecnico (CI):** https://github.com/LucasNeuro/agenteos/actions/runs/25400278960
-- **Ficheiros alterados neste envio:**
-  - `.github/workflows/historico-ci.yml`
-  - `HISTORICO_TRABALHO_MARIA.md`
-  - `scripts/update_historico.py`
 
 ## Commits recentes considerados
 - `1006ca4` - Enhance WhatsApp integration with mandatory button inclusion in decision flows

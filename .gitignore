@@ -7,7 +7,6 @@ __pycache__/
 .env.*
 !.env.example
 tmp/
-_site/
 *.db
 .idea/
 .vscode/
