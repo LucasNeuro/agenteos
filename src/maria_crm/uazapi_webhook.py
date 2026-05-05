@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from agno.agent import Agent
@@ -20,14 +21,77 @@ from .uazapi_ids import (
 from .uazapi_parse import split_maria_reply_for_uaz
 
 
+def _webhook_event_from_body(body: dict[str, Any]) -> str | None:
+    for key in ("event", "EventType", "eventType", "event_type"):
+        v = body.get(key)
+        if v is not None and str(v).strip():
+            return str(v).strip()
+    return None
+
+
+def _merge_chat_into_message(msg: dict[str, Any], chat: dict[str, Any]) -> None:
+    """Preenche ``chatid`` / remetente a partir do objeto ``chat`` (webhook plano Bubble/UAZ)."""
+    if not msg.get("chatid"):
+        for k in ("chatid", "id", "jid", "wa_chatid"):
+            v = chat.get(k)
+            if isinstance(v, str) and v.strip():
+                msg["chatid"] = v.strip()
+                break
+    if not msg.get("sender_pn"):
+        for k in ("sender_pn", "phone", "pn", "senderPhone"):
+            v = chat.get(k)
+            if isinstance(v, str) and v.strip():
+                msg["sender_pn"] = v.strip()
+                break
+    if not msg.get("sender") and isinstance(chat.get("sender"), str) and chat["sender"].strip():
+        msg["sender"] = chat["sender"].strip()
+    if not msg.get("isGroup") and chat.get("isGroup") is not None:
+        msg["isGroup"] = chat["isGroup"]
+
+
+def _message_dict_from_flat_uaz_body(body: dict[str, Any]) -> dict[str, Any] | None:
+    """
+    Formato comum em integrações UAZ/Bubble: ``message`` e ``chat`` no root (sem ``data``).
+    ``message`` por vezes vem ``null``; nesse caso usa-se só ``chat`` quando possível.
+    """
+    raw = body.get("message")
+    if isinstance(raw, str) and raw.strip().startswith("{"):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = None
+    msg: dict[str, Any] = dict(raw) if isinstance(raw, dict) else {}
+    chat = body.get("chat")
+    if isinstance(chat, dict):
+        if msg:
+            _merge_chat_into_message(msg, chat)
+        else:
+            msg = {}
+            _merge_chat_into_message(msg, chat)
+        if not (msg.get("text") or "").strip():
+            for k in ("lastMessageText", "wa_lastMessageText", "text"):
+                v = chat.get(k) if isinstance(chat, dict) else None
+                if isinstance(v, str) and v.strip():
+                    msg["text"] = v.strip()
+                    break
+    if isinstance(msg, dict) and not (msg.get("text") or "").strip():
+        root_txt = body.get("text")
+        if isinstance(root_txt, str) and root_txt.strip():
+            msg["text"] = root_txt.strip()
+    if not msg:
+        return None
+    return msg
+
+
 def _normalize_payload(body: Any) -> tuple[str | None, dict[str, Any] | None]:
     """
     UAZAPI envia ``event: "messages"`` para mensagens novas (OpenAPI); o schema
     WebhookEvent também permite ``event: "message"``. Às vezes vem ``EventType``.
+    Bubble/UAZ pode enviar ``message`` + ``chat`` no root sem ``data``.
     """
     if not isinstance(body, dict):
         return None, None
-    ev = body.get("event") if body.get("event") is not None else body.get("EventType")
+    ev = _webhook_event_from_body(body)
     data = body.get("data")
     if isinstance(data, list):
         # Alguns POSTs enviam ``data: [ { Message }, ... ]`` — sem isto,
@@ -45,7 +109,10 @@ def _normalize_payload(body: Any) -> tuple[str | None, dict[str, Any] | None]:
             return (str(ev) if ev is not None else None, inner)
         return (str(ev) if ev is not None else None, data)
     if body.get("chatid") is not None or body.get("fromMe") is not None or "text" in body:
-        return "message", body
+        return (str(ev) if ev is not None else "message", body)
+    flat = _message_dict_from_flat_uaz_body(body)
+    if flat is not None:
+        return (str(ev) if ev is not None else "message", flat)
     return None, None
 
 
@@ -53,7 +120,9 @@ def _is_incoming_chat_event(event: str | None) -> bool:
     if event is None:
         return True
     e = str(event).strip().lower()
-    return e in ("message", "messages")
+    if e in ("message", "messages"):
+        return True
+    return "message" in e
 
 
 def build_uazapi_router(agent: Agent) -> APIRouter:
