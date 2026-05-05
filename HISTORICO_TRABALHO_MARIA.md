@@ -28,16 +28,6 @@ Resumo para quem nao programa: o que mudou em relacao a **Mari**, ao **WhatsApp*
 - Manter um diario tecnico curto de evolucao do projeto.
 - Facilitar acompanhamento por conversa, codigo e commits.
 
-## Como atualizar (padrao)
-- Actualizar **Ultima atualizacao** no topo com a data (e hora, se quiser).
-- Abrir um bloco novo por data: `## YYYY-MM-DD (Dia)`.
-- Dentro do dia, adicionar entradas por horario: `### HH:MM`.
-- Em cada entrada, registrar:
-  - contexto/problema;
-  - mudancas feitas;
-  - validacao realizada;
-  - proximo passo.
-
 ---
 
 ## 2026-05-05 (Terca-feira)
