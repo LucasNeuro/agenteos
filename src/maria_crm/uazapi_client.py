@@ -1,4 +1,4 @@
-"""Cliente HTTP mínimo UAZAPI — /send/text e /send/menu (botões)."""
+"""Cliente HTTP mínimo UAZAPI — /send/text e /send/menu (botões e listas interactivas)."""
 
 from __future__ import annotations
 
@@ -72,4 +72,37 @@ def uaz_send_button_menu(
         "[bold green]UAZAPI ✓[/] /send/menu button · n=[cyan]%s[/] · opções=%d",
         str(number)[:28],
         len(choices),
+    )
+
+
+def uaz_send_list_menu(
+    number: str,
+    text: str,
+    list_button: str,
+    choices: list[str],
+    *,
+    footer_text: str | None = None,
+    replyid: str | None = None,
+    readchat: bool = True,
+) -> None:
+    """Menu tipo lista (botão estilo *Selecione a unidade* que abre opções — ver doc UAZ ``type: list``)."""
+    log = get_maria_logger()
+    body: dict[str, Any] = {
+        "number": number,
+        "type": "list",
+        "text": text,
+        "listButton": list_button.strip() or "Ver opções",
+        "choices": choices,
+        "readchat": readchat,
+    }
+    if footer_text:
+        body["footerText"] = footer_text
+    if replyid:
+        body["replyid"] = replyid
+    uazapi_post("/send/menu", body)
+    log.info(
+        "[bold green]UAZAPI ✓[/] /send/menu list · n=[cyan]%s[/] · itens=%d · botão=%s",
+        str(number)[:28],
+        len(choices),
+        str(list_button)[:24],
     )

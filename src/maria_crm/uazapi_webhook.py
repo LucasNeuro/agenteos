@@ -10,7 +10,7 @@ from fastapi import APIRouter, Body, Header, Response, status
 
 from .config import uazapi_configured, uazapi_send_reply_to_incoming_message, uazapi_webhook_secret_expected
 from .rich_logging import get_maria_logger
-from .uazapi_client import uaz_send_button_menu, uaz_send_text
+from .uazapi_client import uaz_send_button_menu, uaz_send_list_menu, uaz_send_text
 from .uazapi_ids import (
     maria_user_id_from_uaz_message,
     uaz_incoming_user_turn,
@@ -18,7 +18,7 @@ from .uazapi_ids import (
     uaz_session_id_for_maria,
     uaz_should_ignore_for_chatbot,
 )
-from .uazapi_parse import split_maria_reply_for_uaz
+from .uazapi_parse import parse_maria_reply_for_uaz
 
 
 def _webhook_event_from_body(body: dict[str, Any]) -> str | None:
@@ -215,21 +215,30 @@ def build_uazapi_router(agent: Agent) -> APIRouter:
 
         content = getattr(run_output, "content", None)
         reply_raw = content if isinstance(content, str) else (str(content) if content is not None else "")
-        body_text, choices = split_maria_reply_for_uaz(reply_raw)
-        if not body_text and not choices:
+        parsed = parse_maria_reply_for_uaz(reply_raw)
+        if not parsed.body.strip() and not parsed.has_interactive:
             log.info("[cyan]UAZAPI[/] ignorado · resposta do agente vazia após parse")
             return {"ok": True, "skipped": "empty_assistant"}
 
         try:
-            if choices:
+            if parsed.send_kind == "list" and parsed.list_button and parsed.list_choices:
+                uaz_send_list_menu(
+                    number,
+                    parsed.body or "Escolha uma opção:",
+                    parsed.list_button,
+                    list(parsed.list_choices),
+                    footer_text=parsed.footer_text,
+                    replyid=reply_id_str,
+                )
+            elif parsed.send_kind == "button" and parsed.button_choices:
                 uaz_send_button_menu(
                     number,
-                    body_text or "Escolha uma opção:",
-                    choices,
+                    parsed.body or "Escolha uma opção:",
+                    list(parsed.button_choices),
                     replyid=reply_id_str,
                 )
             else:
-                uaz_send_text(number, body_text, replyid=reply_id_str)
+                uaz_send_text(number, parsed.body.strip() or reply_raw.strip(), replyid=reply_id_str)
         except Exception as e:  # noqa: BLE001
             log.exception("[red]UAZAPI[/] falha ao enviar resposta — %s", e)
             response.status_code = status.HTTP_502_BAD_GATEWAY
