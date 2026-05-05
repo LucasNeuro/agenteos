@@ -23,7 +23,7 @@ Resumo para quem nao programa: o que mudou em relacao a **Mari**, ao **WhatsApp*
 ## Objetivo deste arquivo
 - Este ficheiro e o **relatorio oficial** do trabalho na **agente Mari** (codigo, playbooks, integracao WhatsApp, CRM, memoria, deploy). Trata-se tambem do registo que a equipa pode partilhar com **nao tecnicos**, quando fizer sentido.
 - **Regra:** apos cada entrega ou correcao relevante na Mari, **actualizar aqui** no mesmo dia (ou no proximo dia util): subir a linha **Ultima atualizacao**, acrescentar bullets em **Em linguagem simples** se houver audiencia leiga, e o pormenor tecnico na seccao do **dia**.
-- **Em producao (Render):** o mesmo ficheiro e servido em HTML na rota **`/relatorio`** da app (ex.: `https://<servico>.onrender.com/relatorio`). A pagina le o Markdown no servidor a cada visita; **apos editar este ficheiro e fazer deploy**, o site mostra a versao nova.
+- **Em producao (Render):** o mesmo ficheiro e servido em HTML nas rotas **`/relatorio`** ou **`/relatorios`** (mesmo conteudo; a segunda e alias por engano comum) da app (ex.: `https://<servico>.onrender.com/relatorio`). A pagina le o Markdown no servidor a cada visita; **apos editar este ficheiro e fazer deploy**, o site mostra a versao nova.
 - Registrar o que foi feito por dia e horario.
 - Manter um diario tecnico curto de evolucao do projeto.
 - Facilitar acompanhamento por conversa, codigo e commits.

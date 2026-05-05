@@ -94,11 +94,10 @@ def _wrap_html(title: str, body_html: str) -> str:
 def build_historico_router() -> APIRouter:
     router = APIRouter(tags=[ROUTER_TAG])
 
-    @router.get("/relatorio", response_class=HTMLResponse)
-    def relatorio_maria(
+    def _serve_relatorio(
         request: Request,
-        x_maria_historico_secret: str | None = Header(default=None, alias="X-Maria-Historico-Secret"),
-        t: str | None = Query(default=None),
+        x_maria_historico_secret: str | None,
+        t: str | None,
     ) -> HTMLResponse:
         _require_secret_if_configured(request, x_maria_historico_secret, t)
         path = historico_markdown_path()
@@ -124,5 +123,22 @@ def build_historico_router() -> APIRouter:
         )
         page = _wrap_html(first_line, inner)
         return HTMLResponse(content=page, media_type="text/html; charset=utf-8")
+
+    @router.get("/relatorio", response_class=HTMLResponse)
+    def relatorio_maria(
+        request: Request,
+        x_maria_historico_secret: str | None = Header(default=None, alias="X-Maria-Historico-Secret"),
+        t: str | None = Query(default=None),
+    ) -> HTMLResponse:
+        return _serve_relatorio(request, x_maria_historico_secret, t)
+
+    @router.get("/relatorios", response_class=HTMLResponse)
+    def relatorios_maria_alias(
+        request: Request,
+        x_maria_historico_secret: str | None = Header(default=None, alias="X-Maria-Historico-Secret"),
+        t: str | None = Query(default=None),
+    ) -> HTMLResponse:
+        """Alias comum por engano (/relatorios em vez de /relatorio)."""
+        return _serve_relatorio(request, x_maria_historico_secret, t)
 
     return router
