@@ -8,7 +8,7 @@ from typing import Any
 from agno.agent import Agent
 from fastapi import APIRouter, Body, Header, Response, status
 
-from .config import uazapi_configured, uazapi_webhook_secret_expected
+from .config import uazapi_configured, uazapi_send_reply_to_incoming_message, uazapi_webhook_secret_expected
 from .rich_logging import get_maria_logger
 from .uazapi_client import uaz_send_button_menu, uaz_send_text
 from .uazapi_ids import (
@@ -182,8 +182,10 @@ def build_uazapi_router(agent: Agent) -> APIRouter:
             )
             return {"ok": False, "reason": "missing_ids"}
 
-        reply_id = data.get("messageid")
-        reply_id_str = str(reply_id).strip() if reply_id is not None and str(reply_id).strip() else None
+        reply_id_str: str | None = None
+        if uazapi_send_reply_to_incoming_message():
+            reply_id = data.get("messageid")
+            reply_id_str = str(reply_id).strip() if reply_id is not None and str(reply_id).strip() else None
 
         session_state: dict[str, Any] = {
             "current_user_id": user_id,

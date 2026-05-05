@@ -19,6 +19,7 @@ from agno.tools.mem0 import Mem0Tools
 from mem0.client.main import MemoryClient
 
 from .config import mem0_api_key, mem0_append_infer, mem0_configured, mem0_recall_days
+from .channel_context import _session_state_from_hook_kwargs
 from .rich_logging import get_maria_logger
 
 
@@ -176,13 +177,12 @@ def maria_mem0_load_recent_into_session(session_state: dict[str, Any], user_id: 
         session_state["maria_mem0_recent"] = "(Mem0 indisponível neste turno)"
 
 
-def maria_mem0_pre_hook(
-    *,
-    session_state: dict[str, Any],
-    user_id: str | None = None,
-    session: AgentSession | None = None,
-    **kwargs: Any,
-) -> None:
+def maria_mem0_pre_hook(**kwargs: Any) -> None:
+    session_state = _session_state_from_hook_kwargs(kwargs)
+    if session_state is None:
+        return
+    user_id = kwargs.get("user_id")
+    session = kwargs.get("session")
     uid = resolve_maria_mem0_user_id(
         hook_user_id=user_id,
         session=session,
@@ -246,11 +246,12 @@ def maria_mem0_post_append_turn(
     log = get_maria_logger()
     if not mem0_configured():
         return
+    st = session_state if isinstance(session_state, dict) else _session_state_from_hook_kwargs(kwargs)
     uid = resolve_maria_mem0_user_id(
         hook_user_id=user_id,
         run_output=run_output,
         session=session,
-        session_state=session_state,
+        session_state=st,
     )
     if not uid:
         log.warning(

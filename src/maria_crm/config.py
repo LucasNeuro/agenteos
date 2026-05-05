@@ -80,6 +80,16 @@ def uazapi_webhook_secret_expected() -> str | None:
     return v or None
 
 
+def uazapi_send_reply_to_incoming_message() -> bool:
+    """
+    Se true, ``/send/text`` e ``/send/menu`` recebem ``replyid`` (mensagem citada no WhatsApp).
+
+    Por omissão **false** — respostas em bolha normal; define ``MARIA_UAZAPI_REPLY_TO_USER_MESSAGE=1`` para citar a mensagem do utilizador.
+    """
+    raw = os.getenv("MARIA_UAZAPI_REPLY_TO_USER_MESSAGE", "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
 def mem0_append_infer() -> bool:
     """
     Pós-hook Mem0 (`maria_mem0_post_append_turn`): usar inferência do Mem0 para

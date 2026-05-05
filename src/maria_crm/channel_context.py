@@ -10,12 +10,24 @@ from __future__ import annotations
 from typing import Any
 
 
-def maria_pre_hook_canal_contacto(
-    *,
-    session_state: dict[str, Any],
-    user_id: str | None = None,
-    **kwargs: Any,
-) -> None:
+def _session_state_from_hook_kwargs(kwargs: dict[str, Any]) -> dict[str, Any] | None:
+    """Compatível com Agno que passa ``run_context`` sem ``session_state`` explícito no filtro."""
+    st = kwargs.get("session_state")
+    if isinstance(st, dict):
+        return st
+    rc = kwargs.get("run_context")
+    if rc is not None:
+        st2 = getattr(rc, "session_state", None)
+        if isinstance(st2, dict):
+            return st2
+    return None
+
+
+def maria_pre_hook_canal_contacto(**kwargs: Any) -> None:
+    session_state = _session_state_from_hook_kwargs(kwargs)
+    if session_state is None:
+        return
+    user_id = kwargs.get("user_id")
     uid = user_id or session_state.get("current_user_id")
     if not isinstance(uid, str) or not uid.startswith("wa_"):
         return
