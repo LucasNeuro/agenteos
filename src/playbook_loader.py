@@ -5,6 +5,22 @@ from __future__ import annotations
 from pathlib import Path
 
 _SEPARATOR = "\n\n---\n\n"
+_RUNTIME_PROMPT_GUARD = """
+## Regras técnicas obrigatórias (WhatsApp/UAZAPI)
+
+- Em perguntas de decisão com opções claras, envia sempre opções em bloco explícito.
+- Triagem inicial: incluir sempre `<<<UAZ_BUTTONS>>>` com:
+  - `Buscar imóvel|fluxo1`
+  - `Anunciar imóvel|fluxo2`
+  - `Sou corretor/imobiliária|fluxo3`
+- Fluxo proprietário: na pergunta `vender` vs `alugar`, incluir sempre:
+  - `Vender|vender`
+  - `Alugar|alugar`
+- Fluxo parceiro: na pergunta `cadastrar imóvel` vs `parceria`, incluir sempre:
+  - `Cadastrar imóvel|cadastro_imovel`
+  - `Parceria|parceria`
+- Não usar Markdown para representar opções quando houver escolha; usar o bloco UAZ.
+""".strip()
 
 # Ordem fixa: persona global → núcleo → fluxos (POP Mercado Imobiliário).
 _PLAYBOOK_ACTIVE: tuple[str, ...] = (
@@ -42,4 +58,4 @@ def load_maria_playbook() -> str:
     if not chunks:
         raise ValueError(f"Playbooks vazios em {directory}")
 
-    return _SEPARATOR.join(chunks)
+    return _SEPARATOR.join([_RUNTIME_PROMPT_GUARD, *chunks])

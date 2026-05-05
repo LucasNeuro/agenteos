@@ -201,6 +201,50 @@ def _infer_generic_options_from_markdown(raw: str) -> tuple[str, list[str]] | No
     return (body, choices)
 
 
+def _infer_buttons_from_question(raw: str) -> tuple[str, list[str]] | None:
+    """
+    Fallback por intenção (quando o modelo pergunta, mas não lista opções em linhas):
+    - triagem inicial (buscar/anunciar/corretor);
+    - proprietário (vender/alugar);
+    - parceiro (cadastrar imóvel/parceria).
+    """
+    text = raw.strip()
+    if not text:
+        return None
+    norm = text.lower().replace("imobiliária", "imobiliaria")
+
+    has_busca = re.search(r"\bbusc\w*\b", norm) is not None
+    has_anuncio = re.search(r"\banunci\w*\b", norm) is not None
+    has_imovel = "imovel" in (
+        norm.replace("ó", "o")
+        .replace("í", "i")
+        .replace("ê", "e")
+        .replace("á", "a")
+        .replace("â", "a")
+        .replace("ã", "a")
+    )
+    triage_hit = (has_busca and has_anuncio and has_imovel) and (
+        "corretor" in norm or "imobiliaria" in norm or "parceria" in norm
+    )
+    if triage_hit:
+        return (
+            text,
+            [
+                "Buscar imóvel|fluxo1",
+                "Anunciar imóvel|fluxo2",
+                "Sou corretor/imobiliária|fluxo3",
+            ],
+        )
+
+    if ("vender" in norm and "alugar" in norm and "imovel" in norm.replace("ó", "o")):
+        return (text, ["Vender|vender", "Alugar|alugar"])
+
+    if ("cadastrar" in norm and "imovel" in norm.replace("ó", "o")) and "parceria" in norm:
+        return (text, ["Cadastrar imóvel|cadastro_imovel", "Parceria|parceria"])
+
+    return None
+
+
 def _parse_explicit_list_block(before: str, middle: str) -> MariaUazParsedReply | None:
     """
     ``<<<UAZ_LIST>>>``
@@ -289,6 +333,11 @@ def parse_maria_reply_for_uaz(raw: str) -> MariaUazParsedReply:
             list_button="Selecione uma opção",
             list_choices=tuple(list_choices),
         )
+
+    inferred_question = _infer_buttons_from_question(raw)
+    if inferred_question is not None:
+        body, choices = inferred_question
+        return MariaUazParsedReply(body=body, send_kind="button", button_choices=tuple(choices[:_MAX_BUTTONS]))
 
     return MariaUazParsedReply(body=raw.strip(), send_kind="text")
 
