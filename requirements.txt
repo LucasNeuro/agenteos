@@ -1,6 +1,9 @@
 # Agno + Mistral (MISTRAL_API_KEY) — sem OpenAI neste projeto.
+# fastapi: necessário para AgentOS (agno.os); não vem garantido como dependência transitiva em todos os ambientes.
 
 agno>=2.3.13
+
+fastapi>=0.115.0
 
 mistralai>=1.0.0
 

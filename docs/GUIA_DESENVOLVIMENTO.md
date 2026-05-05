@@ -101,11 +101,16 @@ Documentação Agno: [What is AgentOS?](https://docs.agno.com/agent-os/introduct
 
 OpenAPI: [`docs/uazapi-openapi-spec (12).yaml`](../docs/uazapi-openapi-spec%20(12).yaml). Código: [`src/maria_crm/uazapi_ids.py`](../src/maria_crm/uazapi_ids.py), [`src/maria_crm/uazapi_webhook.py`](../src/maria_crm/uazapi_webhook.py).
 
-1. **Webhook HTTP** implementado na app FastAPI: **`POST /webhooks/uazapi`** (corpo JSON estilo `WebhookEvent` com `event` + `data`, ou objeto mensagem “flat” com `chatid`/`text`). Recomendação: **subir primeiro no Render** (HTTPS público), depois registar na UAZAPI `https://<teu-serviço>.onrender.com/webhooks/uazapi`.
-2. **Evitar loop**: na configuração do webhook UAZ, usar `"excludeMessages": ["wasSentByApi"]`. O handler ignora `fromMe` e grupos.
-3. **`user_id` / `session_id`**: `maria_user_id_from_uaz_message` / `uaz_session_id_for_maria` → `wa_<só dígitos>` (alinhado a Mem0 + CRM + `telefone_whatsapp` no estado de sessão).
-4. **`UAZAPI_TOKEN`** (header `token`) e opcionalmente **`UAZAPI_BASE_URL`** (padrão `https://free.uazapi.com`). Resposta: **`POST /send/text`** ou, se a Mari incluir o bloco `<<<UAZ_BUTTONS>>>...<<<END_UAZ_BUTTONS>>>`, **`POST /send/menu`** com `type: "button"` (até 3 opções — ver playbook de fluxos).
-5. **Segurança opcional**: define `UAZAPI_WEBHOOK_SECRET` e envia o mesmo valor no header **`X-Maria-Webhook-Secret`** (podes configurar header personalizado na UAZ, se disponível).
+1. **Webhook HTTP** implementado na app FastAPI: **`POST /webhooks/uazapi`**. Na UAZ, em **Escutar eventos**, inclui obrigatoriamente **`messages`** (mensagens novas). Sem isto, o Render não recebe o texto do utilizador. Podes manter **`messages_update`** se precisares; eventos como `chats`, `groups`, etc. são opcionais para a Mari.
+2. **URL pública** (ex.: `https://mari-agentos.onrender.com/webhooks/uazapi`). **`excludeMessages`** deve incluir **`wasSentByApi`** para evitar loop com respostas enviadas pela API.
+3. **`UAZAPI_BASE_URL`** no Render/.env deve ser **exactamente o “Server URL” da instância** (ex.: `https://smartvenda.uazapi.com`), **não** assumir `free.uazapi.com` se o painel mostrar outro host.
+4. **`UAZAPI_TOKEN`** = token da instância (header `token` nas chamadas `/send/text` e `/send/menu`).
+5. **`user_id` / `session_id`** no `hub_agent.run`: `wa_<E.164>` estável por contacto (`maria_user_id_from_uaz_message` / `uaz_session_id_for_maria`), alinhado a Mem0 + CRM + `telefone_whatsapp`.
+6. **Segurança opcional:** `UAZAPI_WEBHOOK_SECRET` + header **`X-Maria-Webhook-Secret`** no POST do webhook.
+
+Corpo JSON: típico `WebhookEvent` com `event` + `data` (campos **Message**), ou mensagem “flat”. O código aceita **`event: "messages"`** ou **`"message"`**.
+
+Resposta ao WhatsApp: **`POST /send/text`** ou, se a Mari incluir `<<<UAZ_BUTTONS>>>...`, **`POST /send/menu`** com `type: "button"`.
 
 Mem0 e Supabase usam o mesmo `user_id`/`session_id` definidos no `hub_agent.run(...)` dentro do webhook.
 
@@ -118,7 +123,7 @@ Mem0 e Supabase usam o mesmo `user_id`/`session_id` definidos no `hub_agent.run(
 Blueprint opcional: [`render.yaml`](../render.yaml) na raiz do repositório (ajusta `region` / `plan` no painel Render).
 
 ### Render (Web Service)
-1. **Root:** raiz do repositório; **Runtime** Python 3.11 (ou a versão que usares localmente).
+1. **Root:** raiz do repositório; **Runtime** Python — o ficheiro [`runtime.txt`](../runtime.txt) na raiz fixa **3.11.11** (recomendado; evita o Render usar Python 3.14 beta com pacotes ainda instáveis). No painel podes alinhar **PYTHON_VERSION** ao mesmo valor se necessário.
 2. **Build:** `pip install -r requirements.txt`
 3. **Start:**  
    `uvicorn src.agent_app:app --host 0.0.0.0 --port $PORT`  

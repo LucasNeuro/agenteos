@@ -21,15 +21,30 @@ from .uazapi_parse import split_maria_reply_for_uaz
 
 
 def _normalize_payload(body: Any) -> tuple[str | None, dict[str, Any] | None]:
+    """
+    UAZAPI envia ``event: "messages"`` para mensagens novas (OpenAPI); o schema
+    WebhookEvent também permite ``event: "message"``. Às vezes vem ``EventType``.
+    """
     if not isinstance(body, dict):
         return None, None
-    ev = body.get("event")
+    ev = body.get("event") if body.get("event") is not None else body.get("EventType")
     data = body.get("data")
     if isinstance(data, dict):
+        # Alguns payloads aninham a mensagem em ``data.message``
+        inner = data.get("message")
+        if isinstance(inner, dict) and (inner.get("chatid") is not None or inner.get("text") is not None):
+            return (str(ev) if ev is not None else None, inner)
         return (str(ev) if ev is not None else None, data)
     if body.get("chatid") is not None or body.get("fromMe") is not None or "text" in body:
         return "message", body
     return None, None
+
+
+def _is_incoming_chat_event(event: str | None) -> bool:
+    if event is None:
+        return True
+    e = str(event).strip().lower()
+    return e in ("message", "messages")
 
 
 def build_uazapi_router(agent: Agent) -> APIRouter:
@@ -53,7 +68,7 @@ def build_uazapi_router(agent: Agent) -> APIRouter:
             return {"ok": False, "reason": "uazapi_token not configured"}
 
         event, data = _normalize_payload(payload)
-        if event and event != "message":
+        if not _is_incoming_chat_event(event):
             return {"ok": True, "skipped": f"event:{event}"}
         if not isinstance(data, dict):
             return {"ok": False, "reason": "no data"}
