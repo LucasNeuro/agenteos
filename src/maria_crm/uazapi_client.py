@@ -2,12 +2,32 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any
 
 import httpx
 
-from .config import uazapi_base_url, uazapi_token
+from .config import uazapi_base_url, uazapi_min_seconds_between_sends, uazapi_token
 from .rich_logging import get_maria_logger
+
+_send_lock = threading.Lock()
+_last_outbound_monotonic: dict[str, float] = {}
+
+
+def _throttle_uaz_send(number: str) -> None:
+    """Espaço mínimo entre envios para o mesmo destino (debounce de bolhas / API)."""
+    min_s = uazapi_min_seconds_between_sends()
+    if min_s <= 0:
+        return
+    key = str(number)[:96]
+    with _send_lock:
+        now = time.monotonic()
+        last = _last_outbound_monotonic.get(key, 0.0)
+        wait = min_s - (now - last)
+        if wait > 0:
+            time.sleep(wait)
+        _last_outbound_monotonic[key] = time.monotonic()
 
 
 def _headers() -> dict[str, str]:
@@ -18,6 +38,9 @@ def _headers() -> dict[str, str]:
 
 
 def uazapi_post(path: str, payload: dict[str, Any], *, timeout: float = 90.0) -> dict[str, Any]:
+    num = payload.get("number")
+    if isinstance(num, str) and num.strip():
+        _throttle_uaz_send(num.strip())
     base = uazapi_base_url().rstrip("/")
     url = f"{base}{path}" if path.startswith("/") else f"{base}/{path}"
     r = httpx.post(url, headers=_headers(), json=payload, timeout=timeout)

@@ -12,6 +12,7 @@ from .config import uazapi_configured, uazapi_send_reply_to_incoming_message, ua
 from .rich_logging import get_maria_logger
 from .uazapi_client import uaz_send_button_menu, uaz_send_list_menu, uaz_send_text
 from .property_ingest import ingest_property_image_from_uaz
+from .uazapi_dedupe import webhook_allow_message_id
 from .uazapi_ids import (
     maria_user_id_from_uaz_message,
     uaz_incoming_user_turn,
@@ -167,6 +168,10 @@ def build_uazapi_router(agent: Agent) -> APIRouter:
             log.info("[cyan]UAZAPI[/] ignorado · fromMe/grupo ou regra de skip")
             return {"ok": True, "skipped": "ignored_message"}
 
+        if not webhook_allow_message_id(data.get("messageid")):
+            log.info("[cyan]UAZAPI[/] ignorado · messageid duplicado (debounce webhook)")
+            return {"ok": True, "skipped": "duplicate_messageid"}
+
         user_id = maria_user_id_from_uaz_message(data)
         session_id = uaz_session_id_for_maria(data)
         number = uaz_send_number_from_message(data)
@@ -219,8 +224,15 @@ def build_uazapi_router(agent: Agent) -> APIRouter:
 
         if media_ingest is not None:
             session_state["maria_rascunho_imovel_id"] = media_ingest.imovel_id
-            if media_ingest.vision_summary:
+            session_state["maria_ultima_imagem_valida_imovel"] = media_ingest.valid_property_photo
+            if media_ingest.validation_reason:
+                session_state["maria_ultima_imagem_validacao_motivo"] = str(
+                    media_ingest.validation_reason
+                )[:500]
+            if media_ingest.valid_property_photo is True and media_ingest.vision_summary:
                 session_state["maria_ultima_imagem_resumo"] = media_ingest.vision_summary
+            elif media_ingest.valid_property_photo is False:
+                session_state.pop("maria_ultima_imagem_resumo", None)
 
         log.info(
             "[cyan]UAZAPI[/] agente · user=%s · turn_preview=%s",

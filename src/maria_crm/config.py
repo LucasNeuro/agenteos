@@ -27,6 +27,66 @@ def crm_configured() -> bool:
     return bool(supabase_url() and supabase_service_role_key())
 
 
+def _truthy(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def maria_database_url_raw() -> str | None:
+    """URL Postgres directa (não confundir com SUPABASE_URL da API REST)."""
+    for key in ("MARIA_DATABASE_URL", "SUPABASE_DATABASE_URL", "DATABASE_URL"):
+        v = os.getenv(key, "").strip()
+        if v:
+            return v
+    return None
+
+
+def maria_postgres_url_for_agno() -> str | None:
+    """
+    Normaliza URL para SQLAlchemy + psycopg3 (`postgresql+psycopg://`).
+    Preferir sessão directa (porta 5432) em Supabase para ORM; pooler 6543 pode dar stress em alguns drivers.
+    """
+    raw = maria_database_url_raw()
+    if not raw:
+        return None
+    url = raw.strip()
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://") :]
+    if url.startswith("postgresql://") and not url.startswith("postgresql+psycopg://"):
+        url = "postgresql+psycopg://" + url[len("postgresql://") :]
+    return url
+
+
+def maria_knowledge_enabled_flag() -> bool:
+    return _truthy("MARIA_KNOWLEDGE_ENABLED")
+
+
+def maria_knowledge_auto_enabled() -> bool:
+    """RAG activo só com flag, URL Postgres e chave Mistral (embed + chat)."""
+    if not maria_knowledge_enabled_flag():
+        return False
+    if not maria_postgres_url_for_agno():
+        return False
+    return bool(mistral_api_key())
+
+
+def maria_rag_storage_bucket() -> str:
+    return os.getenv("MARIA_RAG_STORAGE_BUCKET", "maria-rag-documents").strip() or "maria-rag-documents"
+
+
+def maria_knowledge_ingest_mode() -> str:
+    """`local` (pasta no repo) ou `storage` (bucket Supabase)."""
+    v = os.getenv("MARIA_KNOWLEDGE_INGEST_MODE", "local").strip().lower()
+    return v if v in ("local", "storage") else "local"
+
+
+def maria_rag_storage_prefix() -> str:
+    """Prefixo opcional dentro do bucket (ex.: `guardrails/`)."""
+    raw = os.getenv("MARIA_RAG_STORAGE_PREFIX", "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+    return raw if raw.endswith("/") else f"{raw}/"
+
+
 def mem0_api_key() -> str | None:
     v = os.getenv("MEM0_API_KEY", "").strip()
     return v or None
@@ -128,4 +188,24 @@ def maria_vision_model() -> str:
 def maria_property_ingest_enabled() -> bool:
     raw = os.getenv("MARIA_PROPERTY_INGEST_ENABLED", "1").strip().lower()
     return raw not in ("0", "false", "no", "off")
+
+
+def uazapi_min_seconds_between_sends() -> float:
+    """Espaço mínimo entre envios UAZ para o mesmo contacto (evita rajadas de bolhas)."""
+    raw = os.getenv("MARIA_UAZAPI_MIN_SEC_BETWEEN_SENDS", "0.85").strip()
+    try:
+        v = float(raw)
+    except ValueError:
+        return 0.85
+    return max(0.0, min(v, 30.0))
+
+
+def uazapi_webhook_message_dedupe_ttl_sec() -> float:
+    """Ignorar webhooks duplicados com o mesmo messageid durante N segundos (0 = desligado)."""
+    raw = os.getenv("MARIA_UAZAPI_WEBHOOK_DEDUPE_SEC", "300").strip()
+    try:
+        v = float(raw)
+    except ValueError:
+        return 300.0
+    return max(0.0, min(v, 86_400.0))
 

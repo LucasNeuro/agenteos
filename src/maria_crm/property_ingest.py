@@ -28,7 +28,7 @@ from .uazapi_media import (
     uaz_message_image_url,
     uaz_message_is_probably_image,
 )
-from .vision_mistral import mistral_describe_image_bytes
+from .vision_mistral import mistral_analyze_property_image_for_crm
 
 _MAX_DOWNLOAD = 12 * 1024 * 1024
 
@@ -127,6 +127,25 @@ def _get_or_create_draft_imovel(session_uuid: str) -> str:
     return str(inserted[0]["id"])
 
 
+def _next_midia_ordem(imovel_id: str) -> int:
+    """Ordem sequencial por imóvel (várias fotos no mesmo rascunho)."""
+    rows = _rest_get(
+        "maria_imovel_midias",
+        {
+            "imovel_id": f"eq.{imovel_id}",
+            "select": "ordem",
+            "order": "ordem.desc",
+            "limit": "1",
+        },
+    )
+    if not rows:
+        return 0
+    o = rows[0].get("ordem")
+    try:
+        return int(o) + 1 if o is not None else 0
+    except (TypeError, ValueError):
+        return 0
+
 def _safe_segment(s: str) -> str:
     return re.sub(r"[^a-zA-Z0-9._-]+", "_", s)[:120]
 
@@ -168,6 +187,9 @@ class PropertyMediaIngestResult:
     storage_path: str
     vision_summary: str | None
     vision_error: str | None
+    #: True = aceitável como foto do imóvel; False = rejeitado (ex.: tela); None = não avaliado (sem visão ou falha)
+    valid_property_photo: bool | None
+    validation_reason: str | None
 
 
 def ingest_property_image_from_uaz(
@@ -203,6 +225,7 @@ def ingest_property_image_from_uaz(
     if image_body is None:
         log.warning("[yellow]Maria imóvel[/] falha download mídia: %s · %s", down_err, image_url[:80])
         fail_path = f"_failed/{sess_key}/{msg_key}_{uuid.uuid4().hex[:8]}"
+        ordem = _next_midia_ordem(imovel_id)
         mid_row = _rest_insert(
             "maria_imovel_midias",
             {
@@ -214,6 +237,7 @@ def ingest_property_image_from_uaz(
                 "source_channel": "whatsapp",
                 "whatsapp_message_id": str(msg_id)[:200] if msg_id else None,
                 "vision_error": down_err or "download_failed",
+                "ordem": ordem,
             },
         )
         mid = str(mid_row[0]["id"])
@@ -223,6 +247,8 @@ def ingest_property_image_from_uaz(
             storage_path=fail_path,
             vision_summary=None,
             vision_error=down_err,
+            valid_property_photo=None,
+            validation_reason="Download falhou — sem análise.",
         )
 
     ext = _ext_for_mime(resolved_mime or mime_hint)
@@ -238,6 +264,7 @@ def ingest_property_image_from_uaz(
         )
     except Exception as e:  # noqa: BLE001
         log.exception("[red]Maria imóvel[/] upload Storage falhou")
+        ordem = _next_midia_ordem(imovel_id)
         mid_row = _rest_insert(
             "maria_imovel_midias",
             {
@@ -249,6 +276,7 @@ def ingest_property_image_from_uaz(
                 "source_channel": "whatsapp",
                 "whatsapp_message_id": str(msg_id)[:200] if msg_id else None,
                 "vision_error": str(e)[:500],
+                "ordem": ordem,
             },
         )
         return PropertyMediaIngestResult(
@@ -257,18 +285,41 @@ def ingest_property_image_from_uaz(
             storage_path=object_path,
             vision_summary=None,
             vision_error=str(e)[:500],
+            valid_property_photo=None,
+            validation_reason=None,
         )
 
     vision_summary: str | None = None
     vision_error: str | None = None
     vision_model: str | None = None
-    if maria_vision_enabled():
-        vision_summary, vision_error = mistral_describe_image_bytes(
-            image_body,
-            mime_type=resolved_mime,
-        )
-        vision_model = maria_vision_model()
+    valid_photo: bool | None = None
+    valid_reason: str | None = None
+    labels: list[dict[str, Any]] = []
 
+    if maria_vision_enabled():
+        analysis, a_err = mistral_analyze_property_image_for_crm(image_body, mime_type=resolved_mime)
+        vision_model = maria_vision_model()
+        if analysis is not None:
+            valid_photo = analysis.aceitavel_como_foto_imovel
+            valid_reason = analysis.motivo_validacao
+            if analysis.aceitavel_como_foto_imovel:
+                vision_summary = analysis.descricao_curta or analysis.motivo_validacao
+                labels = [{"validacao": "aceito", "motivo": analysis.motivo_validacao}]
+            else:
+                vision_summary = None
+                vision_error = None
+                labels = [{"validacao": "rejeitado_nao_imovel", "motivo": analysis.motivo_validacao}]
+        else:
+            vision_error = a_err
+            valid_photo = None
+            valid_reason = a_err or "Falha na análise"
+            labels = [{"validacao": "indeterminado", "motivo": valid_reason}]
+    else:
+        valid_photo = None
+        valid_reason = "MARIA_VISION_ENABLED=0 ou sem MISTRAL_API_KEY — validação automática desligada."
+        labels = [{"validacao": "sem_visao", "motivo": valid_reason}]
+
+    ordem = _next_midia_ordem(imovel_id)
     mid_insert: dict[str, Any] = {
         "imovel_id": imovel_id,
         "storage_bucket": bucket,
@@ -281,10 +332,11 @@ def ingest_property_image_from_uaz(
         "vision_provider": "mistral" if maria_vision_enabled() else None,
         "vision_model": vision_model,
         "vision_summary": vision_summary,
-        "vision_labels": [],
+        "vision_labels": labels,
         "vision_error": vision_error,
+        "ordem": ordem,
         "vision_at": datetime.now(timezone.utc).isoformat()
-        if vision_summary or vision_error
+        if maria_vision_enabled() and (vision_summary or vision_error or valid_reason)
         else None,
     }
     mid_row = _rest_insert("maria_imovel_midias", mid_insert)
@@ -292,9 +344,9 @@ def ingest_property_image_from_uaz(
 
     cap = uaz_message_caption(data)
     summary_bits = []
-    if vision_summary:
+    if valid_photo is True and vision_summary:
         summary_bits.append(vision_summary.strip())
-    if cap:
+    if valid_photo is True and cap:
         summary_bits.append(f"Legenda WhatsApp: {cap}")
     if summary_bits:
         merged = " · ".join(summary_bits)
@@ -305,9 +357,10 @@ def ingest_property_image_from_uaz(
         )
 
     log.info(
-        "[bold green]Maria imóvel ✓[/] imovel=[cyan]%s[/] path=[dim]%s[/]",
+        "[bold green]Maria imóvel ✓[/] imovel=[cyan]%s[/] path=[dim]%s[/] valid=[yellow]%s[/]",
         imovel_id[:8],
         object_path[:60],
+        valid_photo,
     )
     return PropertyMediaIngestResult(
         imovel_id=imovel_id,
@@ -315,6 +368,8 @@ def ingest_property_image_from_uaz(
         storage_path=object_path,
         vision_summary=vision_summary,
         vision_error=vision_error,
+        valid_property_photo=valid_photo,
+        validation_reason=valid_reason,
     )
 
 

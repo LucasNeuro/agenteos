@@ -10,3 +10,4 @@ tmp/
 *.db
 .idea/
 .vscode/
+./env.example

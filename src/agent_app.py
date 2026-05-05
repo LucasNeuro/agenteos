@@ -5,6 +5,8 @@ Variáveis de ambiente (ficheiro .env na raiz, opcional — carregado com python
   MISTRAL_API_KEY — obrigatória para o modelo Mistral (ver https://docs.agno.com)
   AGNO_MODEL — opcional; padrão: mistral:mistral-large-latest
   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY — CRM (opcional)
+  MARIA_DATABASE_URL — Postgres directo (opcional; RAG com MARIA_KNOWLEDGE_ENABLED=1 — ver .env.example)
+  MARIA_KNOWLEDGE_ENABLED — 1 para Agentic RAG (Knowledge + pgvector no Supabase; migração 005)
   WEBHOOK_MARIA_LEADS_URL — POST do cartão lead (opcional; ex.: n8n CARTÕES_LEADS-MARIA-WENDEL)
   MEM0_API_KEY — Mem0 na nuvem (ligado automaticamente se definido; MARIA_USE_MEM0=0 para desligar)
   UAZAPI_TOKEN, UAZAPI_BASE_URL — WhatsApp via UAZAPI (envio); webhook interno POST /webhooks/uazapi
@@ -34,8 +36,10 @@ from agno.db.sqlite import SqliteDb
 from agno.os import AgentOS
 
 from .playbook_loader import load_maria_playbook
+from .maria_crm.knowledge_maria import try_build_maria_knowledge_optional
 from .maria_crm.channel_context import maria_pre_hook_canal_contacto
 from .maria_crm.config import mem0_api_key, mem0_configured, use_mem0_integration
+from .maria_crm.imovel_endereco_tool import consultar_cep_viacep, gravar_endereco_imovel_crm
 from .maria_crm.lead_property_link_hook import post_link_maria_imoveis_to_lead
 from .maria_crm.lead_stub_hook import post_ensure_maria_contact_stub_lead
 from .maria_crm.lead_tool import registrar_lead_no_crm
@@ -50,7 +54,7 @@ db = SqliteDb(db_file=os.path.normpath(_DB_PATH))
 # Mistral via string — parse em MistralChat; chave em MISTRAL_API_KEY
 MODEL = os.getenv("AGNO_MODEL", "mistral:mistral-large-latest")
 
-_ag_tools = [registrar_lead_no_crm]
+_ag_tools = [registrar_lead_no_crm, consultar_cep_viacep, gravar_endereco_imovel_crm]
 _ag_pre_hooks: list = [maria_pre_hook_canal_contacto]
 _ag_post_hooks = [
     post_log_maria_conversation_turn,
@@ -82,6 +86,8 @@ elif mem0_configured():
 
 # Memórias Agno: só Mistral — memória **agentica** (`update_user_memory` na conversa),
 # em vez do extrator em background (mesmo modelo, tool-calling mais fiável no passo principal).
+_maria_knowledge = try_build_maria_knowledge_optional()
+
 hub_agent = Agent(
     name="HUB Obra 10+ (Mari)",
     model=MODEL,
@@ -90,6 +96,8 @@ hub_agent = Agent(
     tools=_ag_tools,
     pre_hooks=_ag_pre_hooks or None,
     post_hooks=_ag_post_hooks,
+    knowledge=_maria_knowledge,
+    search_knowledge=bool(_maria_knowledge),
     enable_user_memories=False,
     enable_agentic_memory=True,
     add_memories_to_context=True,

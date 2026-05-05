@@ -22,6 +22,12 @@ _RUNTIME_PROMPT_GUARD = """
   - `Cadastrar imóvel|cadastro_imovel`
   - `Parceria|parceria`
 - Não usar Markdown para representar opções quando houver escolha; usar o bloco UAZ.
+
+## Base de conhecimento (RAG), se disponível
+
+- Se tiveres a ferramenta `search_knowledge_base`, usá-la para **políticas internas**, **FAQs**, **guardrails** e documentos operacionais que **não** estejam explicitamente nos playbooks acima.
+- **Não contradigas** os playbooks: eles têm prioridade. O RAG **complementa** (detalhe fora de contexto, produtos, tom, excepções documentadas).
+- Se a busca não devolver nada útil, responde só com base nos playbooks e no contexto da conversa.
 """.strip()
 
 # Ordem fixa: persona global → núcleo → fluxos imobiliário → arquitetura (cliente final).
