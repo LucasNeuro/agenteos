@@ -25,7 +25,7 @@ except ImportError:
 if load_dotenv:
     load_dotenv()
 
-from .maria_crm.rich_logging import setup_maria_rich_logging
+from .maria_crm.rich_logging import get_maria_logger, setup_maria_rich_logging
 
 setup_maria_rich_logging()
 
@@ -35,7 +35,7 @@ from agno.os import AgentOS
 
 from .playbook_loader import load_maria_playbook
 from .maria_crm.channel_context import maria_pre_hook_canal_contacto
-from .maria_crm.config import mem0_api_key, use_mem0_integration
+from .maria_crm.config import mem0_api_key, mem0_configured, use_mem0_integration
 from .maria_crm.lead_stub_hook import post_ensure_maria_contact_stub_lead
 from .maria_crm.lead_tool import registrar_lead_no_crm
 from .maria_crm.message_log import post_log_maria_conversation_turn
@@ -71,6 +71,11 @@ if use_mem0_integration():
         post_log_maria_conversation_turn,
         post_ensure_maria_contact_stub_lead,
     ]
+elif mem0_configured():
+    get_maria_logger().warning(
+        "[yellow]Mem0[/]: [cyan]MEM0_API_KEY[/] definida mas integração desligada "
+        "([dim]MARIA_USE_MEM0=0[/]). Não há add/search de memórias — altera para [bold]1[/] ou remove a variável."
+    )
 
 # Memórias Agno: só Mistral — memória **agentica** (`update_user_memory` na conversa),
 # em vez do extrator em background (mesmo modelo, tool-calling mais fiável no passo principal).
