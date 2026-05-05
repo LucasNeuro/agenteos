@@ -61,10 +61,21 @@ def uaz_send_number_from_message(data: Mapping[str, Any]) -> str | None:
 
 
 def uaz_incoming_text(data: Mapping[str, Any]) -> str:
-    """Texto legível do utilizador (campo comum ``text`` no schema Message)."""
+    """Texto legível do utilizador (``text``, ``content`` string/obj, ``body``)."""
     t = data.get("text")
-    if isinstance(t, str):
+    if isinstance(t, str) and t.strip():
         return t
+    c = data.get("content")
+    if isinstance(c, str) and c.strip():
+        return c
+    if isinstance(c, dict):
+        for key in ("text", "body", "caption", "message"):
+            v = c.get(key)
+            if isinstance(v, str) and v.strip():
+                return v
+    b = data.get("body")
+    if isinstance(b, str) and b.strip():
+        return b
     return ""
 
 

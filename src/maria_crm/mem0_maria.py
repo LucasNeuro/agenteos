@@ -67,6 +67,7 @@ class MariaMem0Tools(Mem0Tools):
             result = self.client.add(
                 messages_list,
                 filters=_filters_for_user(resolved_user_id),
+                user_id=str(resolved_user_id),
                 infer=self.infer,
             )
             return json.dumps(result)
@@ -278,6 +279,7 @@ def maria_mem0_post_append_turn(
         result = client.add(
             [{"role": "user", "content": blob}],
             filters=_filters_for_user(str(uid)),
+            user_id=str(uid),
             infer=mem0_append_infer(),
         )
         n = _count_mem0_add_results(result)
