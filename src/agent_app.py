@@ -36,6 +36,7 @@ from agno.os import AgentOS
 from .playbook_loader import load_maria_playbook
 from .maria_crm.channel_context import maria_pre_hook_canal_contacto
 from .maria_crm.config import mem0_api_key, mem0_configured, use_mem0_integration
+from .maria_crm.lead_property_link_hook import post_link_maria_imoveis_to_lead
 from .maria_crm.lead_stub_hook import post_ensure_maria_contact_stub_lead
 from .maria_crm.lead_tool import registrar_lead_no_crm
 from .maria_crm.message_log import post_log_maria_conversation_turn
@@ -53,6 +54,7 @@ _ag_tools = [registrar_lead_no_crm]
 _ag_pre_hooks: list = [maria_pre_hook_canal_contacto]
 _ag_post_hooks = [
     post_log_maria_conversation_turn,
+    post_link_maria_imoveis_to_lead,
     post_ensure_maria_contact_stub_lead,
 ]
 
@@ -69,6 +71,7 @@ if use_mem0_integration():
     _ag_post_hooks = [
         maria_mem0_post_append_turn,
         post_log_maria_conversation_turn,
+        post_link_maria_imoveis_to_lead,
         post_ensure_maria_contact_stub_lead,
     ]
 elif mem0_configured():

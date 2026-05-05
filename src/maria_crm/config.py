@@ -104,3 +104,28 @@ def mem0_append_infer() -> bool:
         return True
     return False
 
+
+def maria_imovel_storage_bucket() -> str:
+    return os.getenv("MARIA_IMOVEL_STORAGE_BUCKET", "maria-imoveis").strip() or "maria-imoveis"
+
+
+def mistral_api_key() -> str | None:
+    v = os.getenv("MISTRAL_API_KEY", "").strip()
+    return v or None
+
+
+def maria_vision_enabled() -> bool:
+    raw = os.getenv("MARIA_VISION_ENABLED", "1").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return bool(mistral_api_key())
+
+
+def maria_vision_model() -> str:
+    return os.getenv("MARIA_VISION_MODEL", "pixtral-12b-2409").strip() or "pixtral-12b-2409"
+
+
+def maria_property_ingest_enabled() -> bool:
+    raw = os.getenv("MARIA_PROPERTY_INGEST_ENABLED", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+

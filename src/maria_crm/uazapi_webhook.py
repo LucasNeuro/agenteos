@@ -11,6 +11,7 @@ from fastapi import APIRouter, Body, Header, Response, status
 from .config import uazapi_configured, uazapi_send_reply_to_incoming_message, uazapi_webhook_secret_expected
 from .rich_logging import get_maria_logger
 from .uazapi_client import uaz_send_button_menu, uaz_send_list_menu, uaz_send_text
+from .property_ingest import ingest_property_image_from_uaz
 from .uazapi_ids import (
     maria_user_id_from_uaz_message,
     uaz_incoming_user_turn,
@@ -18,6 +19,7 @@ from .uazapi_ids import (
     uaz_session_id_for_maria,
     uaz_should_ignore_for_chatbot,
 )
+from .uazapi_media import uaz_message_is_probably_image
 from .uazapi_parse import parse_maria_reply_for_uaz
 
 
@@ -165,11 +167,6 @@ def build_uazapi_router(agent: Agent) -> APIRouter:
             log.info("[cyan]UAZAPI[/] ignorado · fromMe/grupo ou regra de skip")
             return {"ok": True, "skipped": "ignored_message"}
 
-        user_turn = uaz_incoming_user_turn(data)
-        if not user_turn.strip():
-            log.info("[cyan]UAZAPI[/] ignorado · turno vazio (sem text/content/button)")
-            return {"ok": True, "skipped": "empty_turn"}
-
         user_id = maria_user_id_from_uaz_message(data)
         session_id = uaz_session_id_for_maria(data)
         number = uaz_send_number_from_message(data)
@@ -181,6 +178,30 @@ def build_uazapi_router(agent: Agent) -> APIRouter:
                 str(data.get("sender_pn"))[:48] if data.get("sender_pn") else None,
             )
             return {"ok": False, "reason": "missing_ids"}
+
+        probably_image = uaz_message_is_probably_image(data)
+        media_ingest = None
+        if probably_image:
+            try:
+                digits_for_sess: str | None = None
+                if user_id.startswith("wa_"):
+                    d = user_id[3:]
+                    if d.isdigit():
+                        digits_for_sess = d
+                media_ingest = ingest_property_image_from_uaz(
+                    data,
+                    external_session_id=str(session_id),
+                    phone_digits=digits_for_sess,
+                )
+            except Exception as e:  # noqa: BLE001
+                log.exception("[red]UAZAPI[/] falha ingestão imóvel/mídia — %s", e)
+
+        user_turn = uaz_incoming_user_turn(data)
+        if not user_turn.strip() and probably_image:
+            user_turn = "Enviei uma foto do imóvel."
+        if not user_turn.strip():
+            log.info("[cyan]UAZAPI[/] ignorado · turno vazio (sem text/content/button)")
+            return {"ok": True, "skipped": "empty_turn"}
 
         reply_id_str: str | None = None
         if uazapi_send_reply_to_incoming_message():
@@ -195,6 +216,11 @@ def build_uazapi_router(agent: Agent) -> APIRouter:
             digits = user_id[3:]
             if digits.isdigit():
                 session_state["telefone_whatsapp"] = digits
+
+        if media_ingest is not None:
+            session_state["maria_rascunho_imovel_id"] = media_ingest.imovel_id
+            if media_ingest.vision_summary:
+                session_state["maria_ultima_imagem_resumo"] = media_ingest.vision_summary
 
         log.info(
             "[cyan]UAZAPI[/] agente · user=%s · turn_preview=%s",
