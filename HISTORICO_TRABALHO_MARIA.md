@@ -16,6 +16,7 @@ Ultima atualizacao: 2026-05-05 17:09 (UTC-3)
   - validacao realizada;
   - proximo passo.
 - A secao **Registro automatico (CI)** e preenchida pelo **GitHub Actions** a cada push na branch **main** (linguagem simples + lista de ficheiros). Em Pull Requests o mesmo texto aparece so no log do CI (preview), sem alterar o ficheiro no PR.
+- **Leitura publica no browser (amigavel para nao tecnicos):** o workflow `Pages - Historico publico` gera um site a partir deste ficheiro. Apos a primeira configuracao em **Settings - Pages** (source: **GitHub Actions**), o URL aparece nessa pagina (tipicamente `https://<don>.github.io/<repo>/`).
 
 ---
 
