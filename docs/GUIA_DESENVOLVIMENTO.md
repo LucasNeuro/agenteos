@@ -44,7 +44,7 @@ Copia de [`../.env.example`](../.env.example).
 O ficheiro [`src/agent_app.py`](../src/agent_app.py) define:
 
 - **Modelo:** string `mistral:...` (por defeito `mistral:mistral-large-latest`).
-**Playbooks (POP Mercado Imobiliário):** [`docs/playbooks/`](../docs/playbooks/) — **três** ficheiros ativos (`00_mari_persona_global.md`, `00_mari_mercado_imobiliario_core.md`, `01_mari_mercado_imobiliario_fluxos.md`), carregados por ordem em [`src/playbook_loader.py`](../src/playbook_loader.py). Outros `.md` estão em `docs/playbooks/arquivo/` e não entram no prompt.
+**Playbooks (POP Mercado Imobiliário + Arquitetura):** [`docs/playbooks/`](../docs/playbooks/) — **quatro** ficheiros ativos (`00_mari_persona_global.md`, `00_mari_mercado_imobiliario_core.md`, `01_mari_mercado_imobiliario_fluxos.md`, `02_mari_arquitetura_cliente_final.md`), carregados por ordem em [`src/playbook_loader.py`](../src/playbook_loader.py). Outros `.md` estão em `docs/playbooks/arquivo/` e não entram no prompt.
 - `SqliteDb` em `tmp/agentos.db` (sessões e histórico locais).
 - `timezone_identifier` América/São Paulo; histórico alargado para o modelo não repetir nome/e-mail.
 - `AgentOS` com `tracing=True` à volta da mesma base.

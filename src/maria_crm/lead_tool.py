@@ -37,6 +37,7 @@ def registrar_lead_no_crm(
     - **lead_kind**: `cliente_imobiliario` | `cliente_projetos` | `prestador_servico` | `imobiliaria_corretor`
     - **potencial**: `ALTO` | `MEDIO` | `BAIXO`
     - **intencao_imobiliario** / **modo_imobiliario** para mercado imobiliário conforme playbook.
+    - **cliente_projetos** (arquitetura): **tipo_servico_projeto**, **tamanho_imovel** (faixa m²), **cidade_bairro_projeto**, **prazo**, **servico_solicitado** — ver `02_mari_arquitetura_cliente_final.md`.
     """
     return persist_lead_and_webhook(
         lead_kind,  # type: ignore[arg-type]

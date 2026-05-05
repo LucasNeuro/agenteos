@@ -2,7 +2,7 @@
 
 Bloco base para **tom**, **identidade** e **ritmo** de resposta. Complementa os playbooks de núcleo e fluxos; em caso de conflito num detalhe de fluxo, prevalece o texto do fluxo específico.
 
-**Âmbito:** Mercado Imobiliário (POP v1.0) — cliente final, proprietário, corretor/imobiliária.
+**Âmbito:** Mercado Imobiliário (POP v1.0) e Atendimento de Arquitetura — cliente final (`02_mari_arquitetura_cliente_final.md`), além de proprietário e corretor/imobiliária.
 
 ---
 
@@ -51,4 +51,4 @@ Sempre que o cliente disser o nome, **antes** de avançar para a próxima pergun
 
 ---
 
-*Este ficheiro é carregado **antes** do núcleo (`00_mari_mercado_imobiliario_core.md`) e dos fluxos (`01_mari_mercado_imobiliario_fluxos.md`).*
+*Este ficheiro é carregado **antes** do núcleo (`00_mari_mercado_imobiliario_core.md`), dos fluxos imobiliários (`01_mari_mercado_imobiliario_fluxos.md`) e do módulo arquitetura (`02_mari_arquitetura_cliente_final.md`).*

@@ -9,10 +9,12 @@ _RUNTIME_PROMPT_GUARD = """
 ## Regras técnicas obrigatórias (WhatsApp/UAZAPI)
 
 - Em perguntas de decisão com opções claras, envia sempre opções em bloco explícito.
-- Triagem inicial: incluir sempre `<<<UAZ_BUTTONS>>>` com:
+- Triagem inicial (4 opções): usar `<<<UAZ_LIST>>>` *ou* `<<<UAZ_BUTTONS>>>` com 4 linhas (o servidor converte em lista se >3). Incluir sempre:
   - `Buscar imóvel|fluxo1`
   - `Anunciar imóvel|fluxo2`
   - `Sou corretor/imobiliária|fluxo3`
+  - `Projeto de arquitetura / interiores|fluxo_arquitetura`
+- Fluxo **Arquitetura** (`fluxo_arquitetura`): playbook `02_mari_arquitetura_cliente_final.md` — `lead_kind` **`cliente_projetos`**; botões de tamanho e prazo conforme esse playbook.
 - Fluxo proprietário: na pergunta `vender` vs `alugar`, incluir sempre:
   - `Vender|vender`
   - `Alugar|alugar`
@@ -22,11 +24,12 @@ _RUNTIME_PROMPT_GUARD = """
 - Não usar Markdown para representar opções quando houver escolha; usar o bloco UAZ.
 """.strip()
 
-# Ordem fixa: persona global → núcleo → fluxos (POP Mercado Imobiliário).
+# Ordem fixa: persona global → núcleo → fluxos imobiliário → arquitetura (cliente final).
 _PLAYBOOK_ACTIVE: tuple[str, ...] = (
     "00_mari_persona_global.md",
     "00_mari_mercado_imobiliario_core.md",
     "01_mari_mercado_imobiliario_fluxos.md",
+    "02_mari_arquitetura_cliente_final.md",
 )
 
 
@@ -39,7 +42,7 @@ def load_maria_playbook() -> str:
     if not directory.is_dir():
         msg = (
             f"Pasta de playbooks inexistente: {directory}. "
-            "Crie docs/playbooks/ com os ficheiros POP Mercado Imobiliário."
+            "Crie docs/playbooks/ com os ficheiros POP (imobiliário + arquitetura)."
         )
         raise FileNotFoundError(msg)
 
