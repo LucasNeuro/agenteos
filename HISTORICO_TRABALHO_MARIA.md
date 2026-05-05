@@ -1,6 +1,6 @@
 # Historico de Trabalho - Mari (AgentOS + WhatsApp/UAZAPI)
 
-Ultima atualizacao: 2026-05-05 17:09 (UTC-3)
+Ultima atualizacao: 2026-05-05 17:23 (UTC-3)
 
 ## Objetivo deste arquivo
 - Registrar o que foi feito por dia e horario.
@@ -65,6 +65,23 @@ Ultima atualizacao: 2026-05-05 17:09 (UTC-3)
 - Decisao do projeto: manter contexto o mais rico possivel.
 
 ---
+
+## Registro automatico (CI)
+
+Esta secao e gerada automaticamente pelo GitHub Actions. Cada entrada resume **o que mudou no codigo** em linguagem simples. Para testes no Render (botoes, logs WhatsApp), continue a acrescentar notas manualmente na secao do dia acima.
+
+
+### 2026-05-05 17:23 (UTC-3) - Atividade no repositorio
+
+- **Para nao tecnicos:** Novo codigo foi enviado (push) para o repositorio. Isto significa que ha alteracoes guardadas no historico do projeto.
+- **Branch:** `main`
+- **Commit:** `1f61082` (1f6108238fe0...) - Add automated update for HISTORICO_TRABALHO_MARIA.md and CI workflow
+- **Quem:** LucasNeuro
+- **Detalhe tecnico (CI):** https://github.com/LucasNeuro/agenteos/actions/runs/25400278960
+- **Ficheiros alterados neste envio:**
+  - `.github/workflows/historico-ci.yml`
+  - `HISTORICO_TRABALHO_MARIA.md`
+  - `scripts/update_historico.py`
 
 ## Commits recentes considerados
 - `1006ca4` - Enhance WhatsApp integration with mandatory button inclusion in decision flows
