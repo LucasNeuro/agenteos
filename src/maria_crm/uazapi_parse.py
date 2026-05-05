@@ -97,6 +97,110 @@ def _infer_triage_buttons_from_markdown(raw: str) -> tuple[str, list[str]] | Non
     return (body, ordered)
 
 
+def _strip_option_bullet_prefix(line: str) -> str:
+    s = line.strip()
+    # 1) Opção / 1. Opção / 1 - Opção
+    s = re.sub(r"^\d{1,2}\s*[\)\.\-:]\s*", "", s)
+    # - Opção / * Opção / • Opção
+    s = re.sub(r"^[-–—*•]+\s*", "", s)
+    # a) Opção / A. Opção
+    s = re.sub(r"^[A-Za-z]\s*[\)\.\-:]\s*", "", s)
+    return s.strip()
+
+
+def _normalize_label_for_id(label: str) -> str:
+    s = label.lower().strip()
+    s = (
+        s.replace("á", "a")
+        .replace("à", "a")
+        .replace("ã", "a")
+        .replace("â", "a")
+        .replace("é", "e")
+        .replace("ê", "e")
+        .replace("í", "i")
+        .replace("ó", "o")
+        .replace("ô", "o")
+        .replace("õ", "o")
+        .replace("ú", "u")
+        .replace("ç", "c")
+    )
+    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+    return s[:40] or "opcao"
+
+
+def _infer_generic_options_from_markdown(raw: str) -> tuple[str, list[str]] | None:
+    """
+    Fallback genérico:
+    - se a resposta terminar com 2-3 linhas de opções (bullet/numeração), envia botões;
+    - com 4+ opções, envia lista.
+    """
+    lines = raw.splitlines()
+    candidates: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        # Só considera linhas com cara clara de item.
+        if not re.match(r"^\s*(\d{1,2}\s*[\)\.\-:]|[-–—*•]+|[A-Za-z]\s*[\)\.\-:])\s+", line):
+            continue
+        label = _strip_option_bullet_prefix(line)
+        if not label or len(label) > 60 or label.endswith("?"):
+            continue
+        if label.startswith("[") and label.endswith("]"):
+            # Parece secção de lista UAZ; não inferir aqui.
+            continue
+        candidates.append((i, label))
+
+    if len(candidates) < 2:
+        return None
+
+    # Garante bloco contíguo no final da mensagem (mais previsível para UX).
+    block: list[tuple[int, str]] = [candidates[-1]]
+    for item in reversed(candidates[:-1]):
+        if block[0][0] - item[0] <= 1:
+            block.insert(0, item)
+        else:
+            break
+    if len(block) < 2:
+        return None
+
+    first_idx = block[0][0]
+    tail_has_text = any(ln.strip() for ln in lines[block[-1][0] + 1 :])
+    if tail_has_text:
+        return None
+
+    unique_labels: list[str] = []
+    seen_labels: set[str] = set()
+    for _, lb in block:
+        key = lb.lower().strip()
+        if key in seen_labels:
+            continue
+        seen_labels.add(key)
+        unique_labels.append(lb)
+
+    if len(unique_labels) < 2:
+        return None
+
+    body_lines = lines[:first_idx]
+    while body_lines and not body_lines[-1].strip():
+        body_lines.pop()
+    body = "\n".join(body_lines).strip()
+    if not body:
+        return None
+
+    ids_seen: set[str] = set()
+    choices: list[str] = []
+    for label in unique_labels:
+        cid = _normalize_label_for_id(label)
+        base = cid
+        n = 2
+        while cid in ids_seen:
+            cid = f"{base}_{n}"
+            n += 1
+        ids_seen.add(cid)
+        choices.append(f"{label}|{cid}")
+    return (body, choices)
+
+
 def _parse_explicit_list_block(before: str, middle: str) -> MariaUazParsedReply | None:
     """
     ``<<<UAZ_LIST>>>``
@@ -172,6 +276,19 @@ def parse_maria_reply_for_uaz(raw: str) -> MariaUazParsedReply:
     if inferred is not None:
         body, choices = inferred
         return MariaUazParsedReply(body=body, send_kind="button", button_choices=tuple(choices))
+
+    inferred_generic = _infer_generic_options_from_markdown(raw)
+    if inferred_generic is not None:
+        body, choices = inferred_generic
+        if len(choices) <= _MAX_BUTTONS:
+            return MariaUazParsedReply(body=body, send_kind="button", button_choices=tuple(choices))
+        list_choices: list[str] = ["[Opções]"] + choices
+        return MariaUazParsedReply(
+            body=body,
+            send_kind="list",
+            list_button="Selecione uma opção",
+            list_choices=tuple(list_choices),
+        )
 
     return MariaUazParsedReply(body=raw.strip(), send_kind="text")
 

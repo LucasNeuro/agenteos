@@ -216,6 +216,12 @@ def build_uazapi_router(agent: Agent) -> APIRouter:
         content = getattr(run_output, "content", None)
         reply_raw = content if isinstance(content, str) else (str(content) if content is not None else "")
         parsed = parse_maria_reply_for_uaz(reply_raw)
+        log.info(
+            "[cyan]UAZAPI[/] parse · kind=%s · buttons=%d · list_items=%d",
+            parsed.send_kind,
+            len(parsed.button_choices),
+            len(parsed.list_choices),
+        )
         if not parsed.body.strip() and not parsed.has_interactive:
             log.info("[cyan]UAZAPI[/] ignorado · resposta do agente vazia após parse")
             return {"ok": True, "skipped": "empty_assistant"}
