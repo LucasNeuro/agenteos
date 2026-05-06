@@ -16,12 +16,15 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 from .config import maria_knowledge_ingest_mode, maria_rag_storage_bucket, maria_rag_storage_prefix
 from .knowledge_maria import build_maria_knowledge
 from .rich_logging import get_maria_logger, setup_maria_rich_logging
 from .supabase_storage import supabase_storage_download_bytes, supabase_storage_walk_file_paths
+
+_INGEST_GUARD = threading.Lock()
 
 
 def _project_root() -> Path:
@@ -133,6 +136,20 @@ def run_maria_knowledge_ingest_from_env() -> int:
     return n
 
 
+def run_maria_knowledge_ingest_singleflight() -> int | None:
+    """
+    Evita concorrência entre múltiplos gatilhos de ingest (UI + webhook + cron).
+    Retorna ``None`` quando já existe um job em execução.
+    """
+    acquired = _INGEST_GUARD.acquire(blocking=False)
+    if not acquired:
+        return None
+    try:
+        return run_maria_knowledge_ingest_from_env()
+    finally:
+        _INGEST_GUARD.release()
+
+
 def main() -> None:
     try:
         from dotenv import load_dotenv
@@ -141,7 +158,9 @@ def main() -> None:
     if load_dotenv:
         load_dotenv(_project_root() / ".env")
 
-    run_maria_knowledge_ingest_from_env()
+    out = run_maria_knowledge_ingest_singleflight()
+    if out is None:
+        get_maria_logger().warning("[yellow]RAG ingest[/] já existe um job em execução.")
 
 
 if __name__ == "__main__":

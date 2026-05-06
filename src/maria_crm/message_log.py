@@ -124,16 +124,8 @@ def _get_or_create_session_row(
     }
     if phone:
         row["phone"] = phone
-    try:
-        inserted = _rest_insert("maria_sessions", row)
-        return str(inserted[0]["id"]), True
-    except Exception:
-        # Corrida entre webhooks paralelos: unique(external_session_id) pode falhar no insert
-        # mesmo com SELECT prévio. Reconsulta e segue com a sessão já existente.
-        existing_after_race = _find_session_row(external_session_id)
-        if existing_after_race:
-            return existing_after_race, False
-        raise
+    inserted = _rest_insert("maria_sessions", row)
+    return str(inserted[0]["id"]), True
 
 
 def _insert_message_row(

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Mapping
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .config import (
     crm_configured,
@@ -17,7 +17,8 @@ from .config import (
     maria_rag_admin_secret,
     maria_rag_storage_bucket,
 )
-from .ingest_maria_knowledge import run_maria_knowledge_ingest_from_env
+from .ingest_maria_knowledge import run_maria_knowledge_ingest_singleflight
+from .knowledge_maria import maria_rag_health_snapshot
 from .rich_logging import get_maria_logger, setup_maria_rich_logging
 from .supabase_storage import supabase_upload_bytes
 
@@ -148,7 +149,10 @@ def build_rag_admin_router() -> APIRouter | None:
             if maria_knowledge_ingest_mode() != "storage":
                 log.warning("[yellow]RAG admin[/] reindex ignorado — MARIA_KNOWLEDGE_INGEST_MODE não é storage.")
                 return
-            n = run_maria_knowledge_ingest_from_env()
+            n = run_maria_knowledge_ingest_singleflight()
+            if n is None:
+                log.info("[cyan]RAG admin[/] reindex já em execução; pedido ignorado.")
+                return
             log.info("[green]RAG admin[/] reindex após upload ✓ %s ficheiros processados.", n)
         except Exception:  # noqa: BLE001
             log.exception("[red]RAG admin[/] reindex após upload falhou")
@@ -227,5 +231,15 @@ def build_rag_admin_router() -> APIRouter | None:
             url=f"/admin/rag?t={quote(t, safe='')}&ok=1",
             status_code=303,
         )
+
+    @router.get("/admin/rag/validate")
+    def rag_admin_validate(
+        t: str = Query(..., description="Igual a MARIA_RAG_ADMIN_SECRET"),
+        q: str | None = Query(default=None, description="Texto para validar busca no índice"),
+        limit: int = Query(default=5, ge=1, le=20),
+    ) -> JSONResponse:
+        _check_token(t, secret)
+        snapshot = maria_rag_health_snapshot(q, limit=limit)
+        return JSONResponse(snapshot)
 
     return router

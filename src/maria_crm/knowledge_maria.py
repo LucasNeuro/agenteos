@@ -7,10 +7,18 @@ serve para guardrails e documentos extra indexados sem inflacionar o system prom
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any
 
-from .config import maria_knowledge_auto_enabled, maria_postgres_url_for_agno, mistral_api_key
+from sqlalchemy import create_engine, text
+
+from .config import (
+    maria_knowledge_auto_enabled,
+    maria_knowledge_enabled_flag,
+    maria_postgres_url_for_agno,
+    mistral_api_key,
+)
 from .rich_logging import get_maria_logger
 
 
@@ -85,3 +93,63 @@ def try_build_maria_knowledge_optional() -> Any | None:
     except Exception as e:  # noqa: BLE001
         log.warning("[yellow]Maria RAG[/]: desligada — [red]%s[/]", e)
         return None
+
+
+def maria_rag_health_snapshot(query: str | None = None, *, limit: int = 5) -> dict[str, Any]:
+    """
+    Snapshot operacional do RAG (estado, contagem de índices e validação de consulta textual).
+    """
+    db_url = maria_postgres_url_for_agno()
+    snap: dict[str, Any] = {
+        "generated_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "knowledge_enabled_flag": maria_knowledge_enabled_flag(),
+        "knowledge_auto_enabled": maria_knowledge_auto_enabled(),
+        "db_url_configured": bool(db_url),
+        "mistral_api_key_configured": bool(mistral_api_key()),
+        "embedding_model": maria_knowledge_embedder_id(),
+        "max_results": maria_knowledge_max_results(),
+        "tables": {
+            "ai.maria_knowledge_contents": None,
+            "ai.maria_knowledge_vectors": None,
+        },
+        "query_validation": None,
+    }
+    if not db_url:
+        return snap
+
+    engine = create_engine(db_url, pool_pre_ping=True)
+    try:
+        with engine.connect() as conn:
+            for table in ("ai.maria_knowledge_contents", "ai.maria_knowledge_vectors"):
+                try:
+                    count = conn.execute(text(f"select count(*) from {table}")).scalar_one()
+                    snap["tables"][table] = int(count)
+                except Exception as e:  # noqa: BLE001
+                    snap["tables"][table] = f"error: {str(e)[:180]}"
+
+            q = (query or "").strip()
+            if q:
+                try:
+                    stmt = text(
+                        """
+                        select id, content_id, left(coalesce(content, ''), 260) as preview
+                        from ai.maria_knowledge_vectors
+                        where content ilike :q
+                        order by created_at desc
+                        limit :lim
+                        """
+                    )
+                    rows = conn.execute(stmt, {"q": f"%{q}%", "lim": max(1, min(limit, 20))}).mappings().all()
+                    snap["query_validation"] = {
+                        "query": q,
+                        "matches": len(rows),
+                        "samples": [dict(r) for r in rows],
+                    }
+                except Exception as e:  # noqa: BLE001
+                    snap["query_validation"] = {
+                        "query": q,
+                        "error": str(e)[:220],
+                    }
+    finally:
+        engine.dispose()
+    return snap

@@ -28,15 +28,6 @@ _RUNTIME_PROMPT_GUARD = """
 - Se tiveres a ferramenta `search_knowledge_base`, usá-la para **políticas internas**, **FAQs**, **guardrails** e documentos operacionais que **não** estejam explicitamente nos playbooks acima.
 - **Não contradigas** os playbooks: eles têm prioridade. O RAG **complementa** (detalhe fora de contexto, produtos, tom, excepções documentadas).
 - Se a busca não devolver nada útil, responde só com base nos playbooks e no contexto da conversa.
-
-## Anti-alucinação e qualidade de decisão (obrigatório)
-
-- Nunca inventar: dados, preços, prazos, disponibilidade, regras internas, integrações ou estado de agenda.
-- Se faltar informação para responder com segurança, faz **1 pergunta objetiva por vez** antes de concluir.
-- Em dúvida factual, assume postura conservadora: diz claramente que não tens confirmação e oferece encaminhamento humano.
-- Não inferir dados pessoais sensíveis (nome completo, e-mail, endereço) sem o utilizador informar.
-- Ao finalizar qualificação útil, chamar `registrar_lead_no_crm` no mesmo turno (mesmo com campos parciais usando "Não informado").
-- Evitar respostas longas e genéricas: responder curto, direto e com próximo passo claro.
 """.strip()
 
 # Ordem fixa: persona global → núcleo → fluxos imobiliário → arquitetura (cliente final).

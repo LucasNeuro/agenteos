@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import threading
-import time
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -29,9 +27,6 @@ _ALLOWED_KINDS = frozenset(
     {"cliente_imobiliario", "cliente_projetos", "prestador_servico", "imobiliaria_corretor"}
 )
 _ALLOWED_POT = frozenset({"ALTO", "MEDIO", "BAIXO"})
-_STUB_SEEN_TTL_SEC = 15 * 60
-_stub_seen_guard = threading.Lock()
-_stub_seen_recent: dict[str, float] = {}
 
 
 def _now_brasilia_iso() -> str:
@@ -73,6 +68,24 @@ def _rest_get(
     return data if isinstance(data, list) else []
 
 
+def _session_uuid_from_external_id(external_session_id: str | None) -> str | None:
+    ext = (external_session_id or "").strip()
+    if not ext:
+        return None
+    rows = _rest_get(
+        "maria_sessions",
+        params={
+            "external_session_id": f"eq.{ext}",
+            "select": "id",
+            "limit": "1",
+        },
+    )
+    if not rows:
+        return None
+    sid = rows[0].get("id")
+    return str(sid).strip() if sid is not None and str(sid).strip() else None
+
+
 def _build_card_payload(
     *,
     nome: str,
@@ -101,6 +114,25 @@ def _build_card_payload(
     }
 
 
+def _insert_lead_row_best_effort(lead_row: dict[str, Any], *, log: Any) -> list[dict[str, Any]]:
+    """
+    Compatibilidade com instalações antigas sem migração 002 (source_external_session_id).
+    """
+    try:
+        return _rest_insert("maria_leads", lead_row)
+    except Exception as e:  # noqa: BLE001
+        msg = str(e).lower()
+        if "source_external_session_id" not in msg:
+            raise
+        fallback = dict(lead_row)
+        fallback.pop("source_external_session_id", None)
+        log.warning(
+            "[yellow]registrar_lead[/] coluna source_external_session_id ausente (migração 002). "
+            "Lead será inserido sem essa coluna."
+        )
+        return _rest_insert("maria_leads", fallback)
+
+
 def persist_lead_and_webhook(
     lead_kind: LeadKind,
     nome: str,
@@ -126,6 +158,7 @@ def persist_lead_and_webhook(
     empresa_b2b: str = "",
     intencao_b2b: str = "",
     email_corporativo_b2b: str = "",
+    source_external_session_id: str | None = None,
 ) -> str:
     """
     Insere lead no Supabase (tabela principal + detalhe por tipo), envia POST ao webhook se configurado.
@@ -167,6 +200,8 @@ def persist_lead_and_webhook(
         potencial_justificativa=potencial_justificativa.strip(),
         caracteristicas_adicionais=caracteristicas_adicionais.strip(),
     )
+    source_ext = (source_external_session_id or "").strip() or None
+    session_uuid = _session_uuid_from_external_id(source_ext) if source_ext else None
 
     lead_row = {
         "lead_kind": lead_kind,
@@ -180,10 +215,11 @@ def persist_lead_and_webhook(
         "potencial_justificativa": potencial_justificativa.strip() or None,
         "caracteristicas_adicionais": caracteristicas_adicionais.strip() or None,
         "webhook_payload": card,
-        "session_id": None,
+        "session_id": session_uuid,
+        "source_external_session_id": source_ext,
     }
 
-    inserted = _rest_insert("maria_leads", lead_row)
+    inserted = _insert_lead_row_best_effort(lead_row, log=log)
     if not inserted:
         log.error("[red]registrar_lead[/] — Supabase não devolveu id do lead")
         return "Erro: Supabase não devolveu o registo do lead."
@@ -276,6 +312,30 @@ def persist_lead_and_webhook(
     return f"Lead registado no CRM (id={lead_id}).{wh_msg}"
 
 
+def attach_lead_to_session_by_external_id(*, lead_id: str, external_session_id: str) -> bool:
+    """
+    Mantém consistência `maria_leads.session_id` <-> `maria_sessions.external_session_id`.
+    """
+    if not crm_configured():
+        return False
+    lead = (lead_id or "").strip()
+    ext = (external_session_id or "").strip()
+    if not lead or not ext:
+        return False
+    sid = _session_uuid_from_external_id(ext)
+    if not sid:
+        return False
+    base = supabase_url().rstrip("/")
+    url = f"{base}/rest/v1/maria_leads?id=eq.{lead}"
+    patch = {
+        "session_id": sid,
+        "source_external_session_id": ext,
+    }
+    r = httpx.patch(url, headers=_supabase_headers(), json=patch, timeout=30.0)
+    r.raise_for_status()
+    return True
+
+
 def _patch_lead_webhook_status(
     lead_id: str,
     status: int | None,
@@ -296,19 +356,6 @@ def _patch_lead_webhook_status(
 
 
 _AUTO_STUB_TAG = "[AUTO_STUB]"
-
-
-def _allow_stub_once_per_process(dedupe_key: str) -> bool:
-    """Evita inserções duplicadas em rajada no mesmo processo (além do dedupe no banco)."""
-    now = time.monotonic()
-    with _stub_seen_guard:
-        stale = [k for k, t in _stub_seen_recent.items() if now - t > _STUB_SEEN_TTL_SEC]
-        for k in stale:
-            del _stub_seen_recent[k]
-        if dedupe_key in _stub_seen_recent:
-            return False
-        _stub_seen_recent[dedupe_key] = now
-        return True
 
 
 def ensure_auto_contact_stub_lead(
@@ -335,9 +382,6 @@ def ensure_auto_contact_stub_lead(
     if not dedupe_key:
         log.debug("[dim]Maria CRM stub[/] sem session/user — ignorado")
         return
-    if not _allow_stub_once_per_process(dedupe_key):
-        log.debug("[dim]Maria CRM stub[/] dedupe local em memória · sessão=%s", dedupe_key[:48])
-        return
 
     try:
         existing = _rest_get(
@@ -361,6 +405,7 @@ def ensure_auto_contact_stub_lead(
     tel = (telefone or "").strip()
     if not tel:
         tel = "Não informado"
+    session_uuid = _session_uuid_from_external_id(dedupe_key)
 
     resumo = (
         "Contato registrado automaticamente após primeira (ou seguinte) resposta da Mari. "
@@ -407,12 +452,12 @@ def ensure_auto_contact_stub_lead(
         "potencial_justificativa": justificativa,
         "caracteristicas_adicionais": car_extra,
         "webhook_payload": card,
-        "session_id": None,
+        "session_id": session_uuid,
         "source_external_session_id": dedupe_key,
     }
 
     try:
-        inserted = _rest_insert("maria_leads", lead_row)
+        inserted = _insert_lead_row_best_effort(lead_row, log=log)
     except Exception as e:  # noqa: BLE001
         log.warning(
             "[yellow]Maria CRM stub[/] falha ao inserir — aplica `002_maria_lead_source_session.sql` no Supabase? %s",

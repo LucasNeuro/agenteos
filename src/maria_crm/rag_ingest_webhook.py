@@ -7,7 +7,7 @@ import os
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
 
-from .ingest_maria_knowledge import run_maria_knowledge_ingest_from_env
+from .ingest_maria_knowledge import run_maria_knowledge_ingest_singleflight
 from .rich_logging import get_maria_logger, setup_maria_rich_logging
 
 
@@ -29,7 +29,10 @@ def build_maria_rag_ingest_router() -> APIRouter | None:
 
     def _ingest_job() -> None:
         try:
-            n = run_maria_knowledge_ingest_from_env()
+            n = run_maria_knowledge_ingest_singleflight()
+            if n is None:
+                log.info("[cyan]Maria RAG ingest[/] já está em execução; gatilho ignorado.")
+                return
             log.info("[green]Maria RAG ingest (background) ✓[/] %s ficheiros.", n)
         except Exception:  # noqa: BLE001
             log.exception("[red]Maria RAG ingest (background) falhou[/]")

@@ -26,6 +26,7 @@ def registrar_lead_no_crm(
     empresa_b2b: str = "",
     intencao_b2b: str = "",
     email_corporativo_b2b: str = "",
+    source_external_session_id: str = "",
 ) -> str:
     """
     Regista o lead no mini CRM (Supabase) e envia o cartão JSON ao webhook se configurado.
@@ -62,4 +63,5 @@ def registrar_lead_no_crm(
         empresa_b2b=empresa_b2b,
         intencao_b2b=intencao_b2b,
         email_corporativo_b2b=email_corporativo_b2b,
+        source_external_session_id=source_external_session_id or None,
     )

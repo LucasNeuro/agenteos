@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import time
@@ -21,7 +22,7 @@ from .config import (
 from .rich_logging import get_maria_logger
 from .uazapi_client import uaz_send_button_menu, uaz_send_list_menu, uaz_send_text
 from .property_ingest import ingest_property_image_from_uaz
-from .uazapi_dedupe import webhook_allow_fingerprint, webhook_allow_message_id
+from .uazapi_dedupe import webhook_allow_event_key
 from .uazapi_ids import (
     maria_user_id_from_uaz_message,
     uaz_incoming_user_turn,
@@ -173,41 +174,9 @@ def _merge_single_ingest_into_session_state(session_state: dict[str, Any], media
 
 @dataclass(frozen=True)
 class _UazAgentRunResult:
-    kind: str  # sent | sent_fallback | skipped_empty | error
+    kind: str  # sent | skipped_empty | error
     http_status: int = 200
     error: str | None = None
-
-
-def _send_whatsapp_fallback(number: str, reply_id_str: str | None, log: Any) -> None:
-    try:
-        uaz_send_text(
-            number,
-            (
-                "Tive uma instabilidade aqui e não consegui processar sua mensagem agora. "
-                "Pode me enviar novamente em instantes?"
-            ),
-            replyid=reply_id_str,
-        )
-        log.warning("[yellow]UAZAPI[/] fallback enviado ao utilizador após erro interno")
-    except Exception as e:  # noqa: BLE001
-        log.exception("[red]UAZAPI[/] falha ao enviar fallback — %s", e)
-
-
-def _payload_fingerprint(data: dict[str, Any]) -> str:
-    parts = [
-        str(data.get("id") or "").strip(),
-        str(data.get("chatid") or "").strip(),
-        str(data.get("sender_pn") or "").strip(),
-        str(data.get("sender") or "").strip(),
-        str(data.get("messageType") or "").strip(),
-        str(data.get("text") or "").strip(),
-        str(data.get("buttonOrListid") or "").strip(),
-        str(data.get("convertOptions") or "").strip(),
-        str(data.get("fileURL") or "").strip(),
-        str(data.get("url") or "").strip(),
-        str(data.get("time") or data.get("timestamp") or "").strip(),
-    ]
-    return "|".join(parts)[:700]
 
 
 def _run_uazapi_agent_reply(
@@ -235,9 +204,9 @@ def _run_uazapi_agent_reply(
         )
     except Exception as e:  # noqa: BLE001
         log.exception("[red]UAZAPI[/] falha no agent.run — %s", e)
-        _send_whatsapp_fallback(number, reply_id_str, log)
         return _UazAgentRunResult(
-            kind="sent_fallback",
+            kind="error",
+            http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             error=str(e),
         )
 
@@ -252,8 +221,7 @@ def _run_uazapi_agent_reply(
     )
     if not parsed.body.strip() and not parsed.has_interactive:
         log.info("[cyan]UAZAPI[/] ignorado · resposta do agente vazia após parse")
-        _send_whatsapp_fallback(number, reply_id_str, log)
-        return _UazAgentRunResult(kind="sent_fallback")
+        return _UazAgentRunResult(kind="skipped_empty")
 
     try:
         if parsed.send_kind == "list" and parsed.list_button and parsed.list_choices:
@@ -450,6 +418,38 @@ def _is_incoming_chat_event(event: str | None) -> bool:
     return "message" in e
 
 
+def _event_dedupe_key(data: dict[str, Any]) -> str | None:
+    """
+    Chave estável para idempotência:
+    1) usa ``messageid`` quando existir;
+    2) fallback fingerprint para payloads sem id.
+    """
+    raw_mid = data.get("messageid")
+    if raw_mid is not None and str(raw_mid).strip():
+        return f"mid:{str(raw_mid).strip()}"
+
+    parts: list[str] = []
+    for key in ("chatid", "sender_pn", "sender", "text", "body", "buttonOrListid", "convertOptions", "fileURL", "fileUrl"):
+        v = data.get(key)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s:
+            parts.append(s[:160])
+    for key in ("sendertime", "timestamp", "date", "time"):
+        v = data.get(key)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s:
+            parts.append(s)
+            break
+    if not parts:
+        return None
+    digest = hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()  # noqa: S324
+    return f"fp:{digest}"
+
+
 def build_uazapi_router(agent: Agent) -> APIRouter:
     router = APIRouter(tags=["Maria WhatsApp (UAZAPI)"])
 
@@ -470,114 +470,111 @@ def build_uazapi_router(agent: Agent) -> APIRouter:
             # 200 para a UAZ não reencaminhar indefinidamente; diagnóstico nos logs.
             return {"ok": False, "reason": "uazapi_token not configured"}
 
-        event, data = _normalize_payload(payload)
-        log.info(
-            "[cyan]UAZAPI[/] webhook · event=%s · data_keys=%s",
-            event,
-            sorted(data.keys()) if isinstance(data, dict) else type(data).__name__,
-        )
-        if not _is_incoming_chat_event(event):
-            log.info("[cyan]UAZAPI[/] ignorado · evento não-chat · %s", event)
-            return {"ok": True, "skipped": f"event:{event}"}
-        if not isinstance(data, dict):
-            log.warning(
-                "[yellow]UAZAPI[/] sem objeto de mensagem (payload_keys=%s)",
-                sorted(payload.keys()) if isinstance(payload, dict) else type(payload).__name__,
+        try:
+            event, data = _normalize_payload(payload)
+            log.info(
+                "[cyan]UAZAPI[/] webhook · event=%s · data_keys=%s",
+                event,
+                sorted(data.keys()) if isinstance(data, dict) else type(data).__name__,
             )
-            return {"ok": False, "reason": "no data"}
-
-        if uaz_should_ignore_for_chatbot(data):
-            log.info("[cyan]UAZAPI[/] ignorado · fromMe/grupo ou regra de skip")
-            return {"ok": True, "skipped": "ignored_message"}
-
-        message_id = data.get("messageid")
-        if message_id is not None and str(message_id).strip():
-            if not webhook_allow_message_id(str(message_id)):
-                log.info("[cyan]UAZAPI[/] ignorado · messageid duplicado (debounce webhook)")
-                return {"ok": True, "skipped": "duplicate_messageid"}
-        else:
-            fp = _payload_fingerprint(data)
-            if fp and not webhook_allow_fingerprint(fp):
-                log.info("[cyan]UAZAPI[/] ignorado · payload duplicado sem messageid")
-                return {"ok": True, "skipped": "duplicate_payload_no_messageid"}
-
-        user_id = maria_user_id_from_uaz_message(data)
-        session_id = uaz_session_id_for_maria(data)
-        number = uaz_send_number_from_message(data)
-        if not user_id or not session_id or not number:
-            log.warning(
-                "[yellow]UAZAPI[/] payload sem user/session/number resolvível · "
-                "chatid=%s sender_pn=%s",
-                str(data.get("chatid"))[:48] if data.get("chatid") else None,
-                str(data.get("sender_pn"))[:48] if data.get("sender_pn") else None,
-            )
-            return {"ok": False, "reason": "missing_ids"}
-
-        probably_image = uaz_message_is_probably_image(data)
-        media_ingest = None
-        if probably_image:
-            try:
-                digits_for_sess: str | None = None
-                if user_id.startswith("wa_"):
-                    d = user_id[3:]
-                    if d.isdigit():
-                        digits_for_sess = d
-                media_ingest = ingest_property_image_from_uaz(
-                    data,
-                    external_session_id=str(session_id),
-                    phone_digits=digits_for_sess,
+            if not _is_incoming_chat_event(event):
+                log.info("[cyan]UAZAPI[/] ignorado · evento não-chat · %s", event)
+                return {"ok": True, "skipped": f"event:{event}"}
+            if not isinstance(data, dict):
+                log.warning(
+                    "[yellow]UAZAPI[/] sem objeto de mensagem (payload_keys=%s)",
+                    sorted(payload.keys()) if isinstance(payload, dict) else type(payload).__name__,
                 )
-            except Exception as e:  # noqa: BLE001
-                log.exception("[red]UAZAPI[/] falha ingestão imóvel/mídia — %s", e)
+                return {"ok": False, "reason": "no data"}
 
-        user_turn = uaz_incoming_user_turn(data)
+            if uaz_should_ignore_for_chatbot(data):
+                log.info("[cyan]UAZAPI[/] ignorado · fromMe/grupo ou regra de skip")
+                return {"ok": True, "skipped": "ignored_message"}
 
-        reply_id_str: str | None = None
-        if uazapi_send_reply_to_incoming_message():
-            reply_id = data.get("messageid")
-            reply_id_str = str(reply_id).strip() if reply_id is not None and str(reply_id).strip() else None
+            dedupe_key = _event_dedupe_key(data)
+            if dedupe_key and not webhook_allow_event_key(dedupe_key):
+                log.info("[cyan]UAZAPI[/] ignorado · evento duplicado (%s)", dedupe_key[:48])
+                return {"ok": True, "skipped": "duplicate_event"}
 
-        if probably_image and not user_turn.strip():
-            _media_batch_add(str(session_id), media_ingest)
-            log.info("[cyan]UAZAPI[/] mídia em lote · sessão=%s · aguardando fim do envio", str(session_id)[:24])
-            _schedule_media_batch_flush(
-                agent=agent,
-                user_id=user_id,
-                session_id=str(session_id),
-                number=number,
-                reply_id_str=reply_id_str,
-                log=log,
-            )
-            return {"ok": True, "skipped": "image_only_buffered"}
-        if not user_turn.strip():
-            log.info("[cyan]UAZAPI[/] ignorado · turno vazio (sem text/content/button)")
-            return {"ok": True, "skipped": "empty_turn"}
+            user_id = maria_user_id_from_uaz_message(data)
+            session_id = uaz_session_id_for_maria(data)
+            number = uaz_send_number_from_message(data)
+            if not user_id or not session_id or not number:
+                log.warning(
+                    "[yellow]UAZAPI[/] payload sem user/session/number resolvível · "
+                    "chatid=%s sender_pn=%s",
+                    str(data.get("chatid"))[:48] if data.get("chatid") else None,
+                    str(data.get("sender_pn"))[:48] if data.get("sender_pn") else None,
+                )
+                return {"ok": False, "reason": "missing_ids"}
 
-        with _holding_session_run_gate(str(session_id)):
-            _cancel_media_batch_flush(str(session_id))
-            session_state = _base_maria_session_state(user_id)
-            batch = _media_batch_consume(str(session_id))
-            if batch is not None:
-                _merge_media_batch_into_session_state(session_state, batch)
-            if media_ingest is not None:
-                _merge_single_ingest_into_session_state(session_state, media_ingest)
+            probably_image = uaz_message_is_probably_image(data)
+            media_ingest = None
+            if probably_image:
+                try:
+                    digits_for_sess: str | None = None
+                    if user_id.startswith("wa_"):
+                        d = user_id[3:]
+                        if d.isdigit():
+                            digits_for_sess = d
+                    media_ingest = ingest_property_image_from_uaz(
+                        data,
+                        external_session_id=str(session_id),
+                        phone_digits=digits_for_sess,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    log.exception("[red]UAZAPI[/] falha ingestão imóvel/mídia — %s", e)
 
-            run_res = _run_uazapi_agent_reply(
-                agent=agent,
-                user_id=user_id,
-                session_id=session_id,
-                session_state=session_state,
-                user_turn=user_turn,
-                number=number,
-                reply_id_str=reply_id_str,
-                log=log,
-            )
+            user_turn = uaz_incoming_user_turn(data)
+
+            reply_id_str: str | None = None
+            if uazapi_send_reply_to_incoming_message():
+                reply_id = data.get("messageid")
+                reply_id_str = str(reply_id).strip() if reply_id is not None and str(reply_id).strip() else None
+
+            if probably_image and not user_turn.strip():
+                _media_batch_add(str(session_id), media_ingest)
+                log.info("[cyan]UAZAPI[/] mídia em lote · sessão=%s · aguardando fim do envio", str(session_id)[:24])
+                _schedule_media_batch_flush(
+                    agent=agent,
+                    user_id=user_id,
+                    session_id=str(session_id),
+                    number=number,
+                    reply_id_str=reply_id_str,
+                    log=log,
+                )
+                return {"ok": True, "skipped": "image_only_buffered"}
+            if not user_turn.strip():
+                log.info("[cyan]UAZAPI[/] ignorado · turno vazio (sem text/content/button)")
+                return {"ok": True, "skipped": "empty_turn"}
+
+            with _holding_session_run_gate(str(session_id)):
+                _cancel_media_batch_flush(str(session_id))
+                session_state = _base_maria_session_state(user_id)
+                batch = _media_batch_consume(str(session_id))
+                if batch is not None:
+                    _merge_media_batch_into_session_state(session_state, batch)
+                if media_ingest is not None:
+                    _merge_single_ingest_into_session_state(session_state, media_ingest)
+
+                run_res = _run_uazapi_agent_reply(
+                    agent=agent,
+                    user_id=user_id,
+                    session_id=session_id,
+                    session_state=session_state,
+                    user_turn=user_turn,
+                    number=number,
+                    reply_id_str=reply_id_str,
+                    log=log,
+                )
+        except Exception as e:  # noqa: BLE001
+            log.exception("[red]UAZAPI[/] erro inesperado no webhook — %s", e)
+            response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+            return {"ok": False, "error": "internal_webhook_error"}
 
         if run_res.kind == "error":
             response.status_code = run_res.http_status
             return {"ok": False, "error": run_res.error}
-        if run_res.kind == "sent_fallback":
-            return {"ok": True, "fallback": True}
         if run_res.kind == "skipped_empty":
             return {"ok": True, "skipped": "empty_assistant"}
         return {"ok": True}

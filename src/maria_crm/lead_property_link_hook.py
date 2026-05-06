@@ -9,6 +9,7 @@ from agno.session.agent import AgentSession
 from agno.run.agent import RunOutput
 
 from .channel_context import _session_state_from_hook_kwargs
+from .lead_service import attach_lead_to_session_by_external_id
 from .property_ingest import link_imoveis_rascunho_to_lead
 from .rich_logging import get_maria_logger
 
@@ -56,6 +57,9 @@ def post_link_maria_imoveis_to_lead(
     if not ext:
         return
     try:
+        linked = attach_lead_to_session_by_external_id(lead_id=lead_id, external_session_id=str(ext))
+        if linked:
+            log.info("[green]Maria CRM ✓[/] lead [cyan]%s[/] vinculado à sessão externa", lead_id[:8])
         link_imoveis_rascunho_to_lead(external_session_id=str(ext), lead_id=lead_id)
         log.info(
             "[green]Maria imóvel ✓[/] rascunhos ligados ao lead [cyan]%s[/]",
