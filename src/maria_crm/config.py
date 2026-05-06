@@ -220,3 +220,16 @@ def uazapi_webhook_message_dedupe_ttl_sec() -> float:
         return 300.0
     return max(0.0, min(v, 86_400.0))
 
+
+def maria_media_batch_flush_after_sec() -> float:
+    """
+    Depois da última foto (só mídia, sem texto), espera N segundos sem nova foto e encerra o lote
+    (uma resposta da Mari). 0 = desligado; aí só há resposta quando o cliente mandar texto.
+    """
+    raw = os.getenv("MARIA_MEDIA_BATCH_FLUSH_SEC", "3.5").strip()
+    try:
+        v = float(raw)
+    except ValueError:
+        return 3.5
+    return max(0.0, min(v, 45.0))
+

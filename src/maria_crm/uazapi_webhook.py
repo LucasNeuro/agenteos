@@ -5,13 +5,19 @@ from __future__ import annotations
 import json
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
 from agno.agent import Agent
 from fastapi import APIRouter, Body, Header, Response, status
 
-from .config import uazapi_configured, uazapi_send_reply_to_incoming_message, uazapi_webhook_secret_expected
+from .config import (
+    maria_media_batch_flush_after_sec,
+    uazapi_configured,
+    uazapi_send_reply_to_incoming_message,
+    uazapi_webhook_secret_expected,
+)
 from .rich_logging import get_maria_logger
 from .uazapi_client import uaz_send_button_menu, uaz_send_list_menu, uaz_send_text
 from .property_ingest import ingest_property_image_from_uaz
@@ -81,6 +87,230 @@ def _media_batch_consume(session_id: str) -> _MediaBatchState | None:
     with _media_batch_lock:
         _cleanup_old_media_batches(now)
         return _media_batches_by_session.pop(session_id, None)
+
+
+_session_gates_guard = threading.Lock()
+_session_gates: dict[str, threading.Lock] = {}
+
+_batch_flush_registry_lock = threading.Lock()
+_batch_flush_timers: dict[str, threading.Timer] = {}
+
+
+def _session_run_gate(session_id: str) -> threading.Lock:
+    sid = str(session_id)
+    with _session_gates_guard:
+        gate = _session_gates.get(sid)
+        if gate is None:
+            gate = threading.Lock()
+            _session_gates[sid] = gate
+        return gate
+
+
+@contextmanager
+def _holding_session_run_gate(session_id: str):
+    gate = _session_run_gate(session_id)
+    gate.acquire()
+    try:
+        yield
+    finally:
+        gate.release()
+
+
+def _cancel_media_batch_flush(session_id: str) -> None:
+    sid = str(session_id)
+    with _batch_flush_registry_lock:
+        t = _batch_flush_timers.pop(sid, None)
+    if t is not None:
+        t.cancel()
+
+
+def _base_maria_session_state(user_id: str) -> dict[str, Any]:
+    session_state: dict[str, Any] = {
+        "current_user_id": user_id,
+        "origem_canal": "WhatsApp",
+    }
+    if user_id.startswith("wa_"):
+        digits = user_id[3:]
+        if digits.isdigit():
+            session_state["telefone_whatsapp"] = digits
+    return session_state
+
+
+def _merge_media_batch_into_session_state(session_state: dict[str, Any], batch: _MediaBatchState) -> None:
+    if batch.imovel_id:
+        session_state["maria_rascunho_imovel_id"] = batch.imovel_id
+    if batch.accepted > 0:
+        session_state["maria_ultima_imagem_valida_imovel"] = True
+        if batch.last_valid_summary:
+            session_state["maria_ultima_imagem_resumo"] = batch.last_valid_summary
+    elif batch.rejected > 0 and batch.unknown == 0:
+        session_state["maria_ultima_imagem_valida_imovel"] = False
+        session_state.pop("maria_ultima_imagem_resumo", None)
+    else:
+        session_state["maria_ultima_imagem_valida_imovel"] = None
+    session_state["maria_ultima_imagem_validacao_motivo"] = (
+        f"Lote de fotos recebido: {batch.total} arquivo(s), "
+        f"{batch.accepted} aceito(s), {batch.rejected} rejeitado(s), {batch.unknown} sem validação."
+    )[:500]
+    if batch.last_reason:
+        session_state["maria_ultima_imagem_validacao_motivo"] = (
+            f"{session_state['maria_ultima_imagem_validacao_motivo']} Último motivo: {batch.last_reason}"
+        )[:500]
+
+
+def _merge_single_ingest_into_session_state(session_state: dict[str, Any], media_ingest: Any) -> None:
+    session_state["maria_rascunho_imovel_id"] = media_ingest.imovel_id
+    session_state["maria_ultima_imagem_valida_imovel"] = media_ingest.valid_property_photo
+    if media_ingest.validation_reason:
+        session_state["maria_ultima_imagem_validacao_motivo"] = str(
+            media_ingest.validation_reason
+        )[:500]
+    if media_ingest.valid_property_photo is True and media_ingest.vision_summary:
+        session_state["maria_ultima_imagem_resumo"] = media_ingest.vision_summary
+    elif media_ingest.valid_property_photo is False:
+        session_state.pop("maria_ultima_imagem_resumo", None)
+
+
+@dataclass(frozen=True)
+class _UazAgentRunResult:
+    kind: str  # sent | skipped_empty | error
+    http_status: int = 200
+    error: str | None = None
+
+
+def _run_uazapi_agent_reply(
+    *,
+    agent: Agent,
+    user_id: str,
+    session_id: str | int,
+    session_state: dict[str, Any],
+    user_turn: str,
+    number: str,
+    reply_id_str: str | None,
+    log: Any,
+) -> _UazAgentRunResult:
+    log.info(
+        "[cyan]UAZAPI[/] agente · user=%s · turn_preview=%s",
+        str(user_id)[:32],
+        (user_turn[:80] + "…") if len(user_turn) > 80 else user_turn,
+    )
+    try:
+        run_output = agent.run(
+            user_turn,
+            user_id=user_id,
+            session_id=session_id,
+            session_state=session_state,
+        )
+    except Exception as e:  # noqa: BLE001
+        log.exception("[red]UAZAPI[/] falha no agent.run — %s", e)
+        return _UazAgentRunResult(
+            kind="error",
+            http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            error=str(e),
+        )
+
+    content = getattr(run_output, "content", None)
+    reply_raw = content if isinstance(content, str) else (str(content) if content is not None else "")
+    parsed = parse_maria_reply_for_uaz(reply_raw)
+    log.info(
+        "[cyan]UAZAPI[/] parse · kind=%s · buttons=%d · list_items=%d",
+        parsed.send_kind,
+        len(parsed.button_choices),
+        len(parsed.list_choices),
+    )
+    if not parsed.body.strip() and not parsed.has_interactive:
+        log.info("[cyan]UAZAPI[/] ignorado · resposta do agente vazia após parse")
+        return _UazAgentRunResult(kind="skipped_empty")
+
+    try:
+        if parsed.send_kind == "list" and parsed.list_button and parsed.list_choices:
+            uaz_send_list_menu(
+                number,
+                parsed.body or "Escolha uma opção:",
+                parsed.list_button,
+                list(parsed.list_choices),
+                footer_text=parsed.footer_text,
+                replyid=reply_id_str,
+            )
+        elif parsed.send_kind == "button" and parsed.button_choices:
+            uaz_send_button_menu(
+                number,
+                parsed.body or "Escolha uma opção:",
+                list(parsed.button_choices),
+                replyid=reply_id_str,
+            )
+        else:
+            uaz_send_text(number, parsed.body.strip() or reply_raw.strip(), replyid=reply_id_str)
+    except Exception as e:  # noqa: BLE001
+        log.exception("[red]UAZAPI[/] falha ao enviar resposta — %s", e)
+        return _UazAgentRunResult(
+            kind="error",
+            http_status=status.HTTP_502_BAD_GATEWAY,
+            error=str(e),
+        )
+
+    return _UazAgentRunResult(kind="sent")
+
+
+def _schedule_media_batch_flush(
+    *,
+    agent: Agent,
+    user_id: str,
+    session_id: str,
+    number: str,
+    reply_id_str: str | None,
+    log: Any,
+) -> None:
+    delay = maria_media_batch_flush_after_sec()
+    if delay <= 0:
+        return
+    sid = str(session_id)
+
+    def fire() -> None:
+        try:
+            with _holding_session_run_gate(sid):
+                batch = _media_batch_consume(sid)
+                if batch is None:
+                    log.info(
+                        "[cyan]UAZAPI[/] flush lote · já consumido ou vazio · sessão=%s",
+                        sid[:32],
+                    )
+                    return
+                session_state = _base_maria_session_state(user_id)
+                _merge_media_batch_into_session_state(session_state, batch)
+                user_turn = (
+                    f"Acabei de enviar {batch.total} foto(s) do imóvel pelo WhatsApp (só imagens, sem texto). "
+                    "Trata o registo e responde com o próximo passo para o cliente."
+                )
+                res = _run_uazapi_agent_reply(
+                    agent=agent,
+                    user_id=user_id,
+                    session_id=session_id,
+                    session_state=session_state,
+                    user_turn=user_turn,
+                    number=number,
+                    reply_id_str=reply_id_str,
+                    log=log,
+                )
+                if res.kind == "error":
+                    log.warning("[yellow]UAZAPI[/] flush lote · falha · %s", res.error)
+        finally:
+            with _batch_flush_registry_lock:
+                _batch_flush_timers.pop(sid, None)
+
+    with _batch_flush_registry_lock:
+        old = _batch_flush_timers.pop(sid, None)
+        if old is not None:
+            old.cancel()
+        timer = threading.Timer(delay, fire)
+        timer.daemon = True
+        _batch_flush_timers[sid] = timer
+    timer.start()
+    log.info(
+        "[cyan]UAZAPI[/] mídia em lote · flush agendado · sessão=%s · em %.1fs",
+        sid[:24],
+        delay,
+    )
 
 
 def _webhook_event_from_body(body: dict[str, Any]) -> str | None:
@@ -261,116 +491,53 @@ def build_uazapi_router(agent: Agent) -> APIRouter:
                 log.exception("[red]UAZAPI[/] falha ingestão imóvel/mídia — %s", e)
 
         user_turn = uaz_incoming_user_turn(data)
-        if probably_image and not user_turn.strip():
-            _media_batch_add(str(session_id), media_ingest)
-            log.info("[cyan]UAZAPI[/] mídia em lote · sessão=%s · aguardando fim do envio", str(session_id)[:24])
-            return {"ok": True, "skipped": "image_only_buffered"}
-        if not user_turn.strip():
-            log.info("[cyan]UAZAPI[/] ignorado · turno vazio (sem text/content/button)")
-            return {"ok": True, "skipped": "empty_turn"}
 
         reply_id_str: str | None = None
         if uazapi_send_reply_to_incoming_message():
             reply_id = data.get("messageid")
             reply_id_str = str(reply_id).strip() if reply_id is not None and str(reply_id).strip() else None
 
-        session_state: dict[str, Any] = {
-            "current_user_id": user_id,
-            "origem_canal": "WhatsApp",
-        }
-        if user_id.startswith("wa_"):
-            digits = user_id[3:]
-            if digits.isdigit():
-                session_state["telefone_whatsapp"] = digits
+        if probably_image and not user_turn.strip():
+            _media_batch_add(str(session_id), media_ingest)
+            log.info("[cyan]UAZAPI[/] mídia em lote · sessão=%s · aguardando fim do envio", str(session_id)[:24])
+            _schedule_media_batch_flush(
+                agent=agent,
+                user_id=user_id,
+                session_id=str(session_id),
+                number=number,
+                reply_id_str=reply_id_str,
+                log=log,
+            )
+            return {"ok": True, "skipped": "image_only_buffered"}
+        if not user_turn.strip():
+            log.info("[cyan]UAZAPI[/] ignorado · turno vazio (sem text/content/button)")
+            return {"ok": True, "skipped": "empty_turn"}
 
-        batch = _media_batch_consume(str(session_id))
-        if batch is not None:
-            if batch.imovel_id:
-                session_state["maria_rascunho_imovel_id"] = batch.imovel_id
-            if batch.accepted > 0:
-                session_state["maria_ultima_imagem_valida_imovel"] = True
-                if batch.last_valid_summary:
-                    session_state["maria_ultima_imagem_resumo"] = batch.last_valid_summary
-            elif batch.rejected > 0 and batch.unknown == 0:
-                session_state["maria_ultima_imagem_valida_imovel"] = False
-                session_state.pop("maria_ultima_imagem_resumo", None)
-            else:
-                session_state["maria_ultima_imagem_valida_imovel"] = None
-            session_state["maria_ultima_imagem_validacao_motivo"] = (
-                f"Lote de fotos recebido: {batch.total} arquivo(s), "
-                f"{batch.accepted} aceito(s), {batch.rejected} rejeitado(s), {batch.unknown} sem validação."
-            )[:500]
-            if batch.last_reason:
-                session_state["maria_ultima_imagem_validacao_motivo"] = (
-                    f"{session_state['maria_ultima_imagem_validacao_motivo']} Último motivo: {batch.last_reason}"
-                )[:500]
+        with _holding_session_run_gate(str(session_id)):
+            _cancel_media_batch_flush(str(session_id))
+            session_state = _base_maria_session_state(user_id)
+            batch = _media_batch_consume(str(session_id))
+            if batch is not None:
+                _merge_media_batch_into_session_state(session_state, batch)
+            if media_ingest is not None:
+                _merge_single_ingest_into_session_state(session_state, media_ingest)
 
-        if media_ingest is not None:
-            session_state["maria_rascunho_imovel_id"] = media_ingest.imovel_id
-            session_state["maria_ultima_imagem_valida_imovel"] = media_ingest.valid_property_photo
-            if media_ingest.validation_reason:
-                session_state["maria_ultima_imagem_validacao_motivo"] = str(
-                    media_ingest.validation_reason
-                )[:500]
-            if media_ingest.valid_property_photo is True and media_ingest.vision_summary:
-                session_state["maria_ultima_imagem_resumo"] = media_ingest.vision_summary
-            elif media_ingest.valid_property_photo is False:
-                session_state.pop("maria_ultima_imagem_resumo", None)
-
-        log.info(
-            "[cyan]UAZAPI[/] agente · user=%s · turn_preview=%s",
-            str(user_id)[:32],
-            (user_turn[:80] + "…") if len(user_turn) > 80 else user_turn,
-        )
-        try:
-            run_output = agent.run(
-                user_turn,
+            run_res = _run_uazapi_agent_reply(
+                agent=agent,
                 user_id=user_id,
                 session_id=session_id,
                 session_state=session_state,
+                user_turn=user_turn,
+                number=number,
+                reply_id_str=reply_id_str,
+                log=log,
             )
-        except Exception as e:  # noqa: BLE001
-            log.exception("[red]UAZAPI[/] falha no agent.run — %s", e)
-            response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
-            return {"ok": False, "error": str(e)}
 
-        content = getattr(run_output, "content", None)
-        reply_raw = content if isinstance(content, str) else (str(content) if content is not None else "")
-        parsed = parse_maria_reply_for_uaz(reply_raw)
-        log.info(
-            "[cyan]UAZAPI[/] parse · kind=%s · buttons=%d · list_items=%d",
-            parsed.send_kind,
-            len(parsed.button_choices),
-            len(parsed.list_choices),
-        )
-        if not parsed.body.strip() and not parsed.has_interactive:
-            log.info("[cyan]UAZAPI[/] ignorado · resposta do agente vazia após parse")
+        if run_res.kind == "error":
+            response.status_code = run_res.http_status
+            return {"ok": False, "error": run_res.error}
+        if run_res.kind == "skipped_empty":
             return {"ok": True, "skipped": "empty_assistant"}
-
-        try:
-            if parsed.send_kind == "list" and parsed.list_button and parsed.list_choices:
-                uaz_send_list_menu(
-                    number,
-                    parsed.body or "Escolha uma opção:",
-                    parsed.list_button,
-                    list(parsed.list_choices),
-                    footer_text=parsed.footer_text,
-                    replyid=reply_id_str,
-                )
-            elif parsed.send_kind == "button" and parsed.button_choices:
-                uaz_send_button_menu(
-                    number,
-                    parsed.body or "Escolha uma opção:",
-                    list(parsed.button_choices),
-                    replyid=reply_id_str,
-                )
-            else:
-                uaz_send_text(number, parsed.body.strip() or reply_raw.strip(), replyid=reply_id_str)
-        except Exception as e:  # noqa: BLE001
-            log.exception("[red]UAZAPI[/] falha ao enviar resposta — %s", e)
-            response.status_code = status.HTTP_502_BAD_GATEWAY
-            return {"ok": False, "error": str(e)}
-
         return {"ok": True}
 
     return router
