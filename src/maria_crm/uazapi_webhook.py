@@ -21,7 +21,7 @@ from .config import (
 from .rich_logging import get_maria_logger
 from .uazapi_client import uaz_send_button_menu, uaz_send_list_menu, uaz_send_text
 from .property_ingest import ingest_property_image_from_uaz
-from .uazapi_dedupe import webhook_allow_message_id
+from .uazapi_dedupe import webhook_allow_fingerprint, webhook_allow_message_id
 from .uazapi_ids import (
     maria_user_id_from_uaz_message,
     uaz_incoming_user_turn,
@@ -173,9 +173,41 @@ def _merge_single_ingest_into_session_state(session_state: dict[str, Any], media
 
 @dataclass(frozen=True)
 class _UazAgentRunResult:
-    kind: str  # sent | skipped_empty | error
+    kind: str  # sent | sent_fallback | skipped_empty | error
     http_status: int = 200
     error: str | None = None
+
+
+def _send_whatsapp_fallback(number: str, reply_id_str: str | None, log: Any) -> None:
+    try:
+        uaz_send_text(
+            number,
+            (
+                "Tive uma instabilidade aqui e não consegui processar sua mensagem agora. "
+                "Pode me enviar novamente em instantes?"
+            ),
+            replyid=reply_id_str,
+        )
+        log.warning("[yellow]UAZAPI[/] fallback enviado ao utilizador após erro interno")
+    except Exception as e:  # noqa: BLE001
+        log.exception("[red]UAZAPI[/] falha ao enviar fallback — %s", e)
+
+
+def _payload_fingerprint(data: dict[str, Any]) -> str:
+    parts = [
+        str(data.get("id") or "").strip(),
+        str(data.get("chatid") or "").strip(),
+        str(data.get("sender_pn") or "").strip(),
+        str(data.get("sender") or "").strip(),
+        str(data.get("messageType") or "").strip(),
+        str(data.get("text") or "").strip(),
+        str(data.get("buttonOrListid") or "").strip(),
+        str(data.get("convertOptions") or "").strip(),
+        str(data.get("fileURL") or "").strip(),
+        str(data.get("url") or "").strip(),
+        str(data.get("time") or data.get("timestamp") or "").strip(),
+    ]
+    return "|".join(parts)[:700]
 
 
 def _run_uazapi_agent_reply(
@@ -203,9 +235,9 @@ def _run_uazapi_agent_reply(
         )
     except Exception as e:  # noqa: BLE001
         log.exception("[red]UAZAPI[/] falha no agent.run — %s", e)
+        _send_whatsapp_fallback(number, reply_id_str, log)
         return _UazAgentRunResult(
-            kind="error",
-            http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            kind="sent_fallback",
             error=str(e),
         )
 
@@ -220,7 +252,8 @@ def _run_uazapi_agent_reply(
     )
     if not parsed.body.strip() and not parsed.has_interactive:
         log.info("[cyan]UAZAPI[/] ignorado · resposta do agente vazia após parse")
-        return _UazAgentRunResult(kind="skipped_empty")
+        _send_whatsapp_fallback(number, reply_id_str, log)
+        return _UazAgentRunResult(kind="sent_fallback")
 
     try:
         if parsed.send_kind == "list" and parsed.list_button and parsed.list_choices:
@@ -457,9 +490,16 @@ def build_uazapi_router(agent: Agent) -> APIRouter:
             log.info("[cyan]UAZAPI[/] ignorado · fromMe/grupo ou regra de skip")
             return {"ok": True, "skipped": "ignored_message"}
 
-        if not webhook_allow_message_id(data.get("messageid")):
-            log.info("[cyan]UAZAPI[/] ignorado · messageid duplicado (debounce webhook)")
-            return {"ok": True, "skipped": "duplicate_messageid"}
+        message_id = data.get("messageid")
+        if message_id is not None and str(message_id).strip():
+            if not webhook_allow_message_id(str(message_id)):
+                log.info("[cyan]UAZAPI[/] ignorado · messageid duplicado (debounce webhook)")
+                return {"ok": True, "skipped": "duplicate_messageid"}
+        else:
+            fp = _payload_fingerprint(data)
+            if fp and not webhook_allow_fingerprint(fp):
+                log.info("[cyan]UAZAPI[/] ignorado · payload duplicado sem messageid")
+                return {"ok": True, "skipped": "duplicate_payload_no_messageid"}
 
         user_id = maria_user_id_from_uaz_message(data)
         session_id = uaz_session_id_for_maria(data)
@@ -536,6 +576,8 @@ def build_uazapi_router(agent: Agent) -> APIRouter:
         if run_res.kind == "error":
             response.status_code = run_res.http_status
             return {"ok": False, "error": run_res.error}
+        if run_res.kind == "sent_fallback":
+            return {"ok": True, "fallback": True}
         if run_res.kind == "skipped_empty":
             return {"ok": True, "skipped": "empty_assistant"}
         return {"ok": True}

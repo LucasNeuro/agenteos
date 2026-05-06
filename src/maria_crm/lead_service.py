@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import threading
+import time
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -27,6 +29,9 @@ _ALLOWED_KINDS = frozenset(
     {"cliente_imobiliario", "cliente_projetos", "prestador_servico", "imobiliaria_corretor"}
 )
 _ALLOWED_POT = frozenset({"ALTO", "MEDIO", "BAIXO"})
+_STUB_SEEN_TTL_SEC = 15 * 60
+_stub_seen_guard = threading.Lock()
+_stub_seen_recent: dict[str, float] = {}
 
 
 def _now_brasilia_iso() -> str:
@@ -293,6 +298,19 @@ def _patch_lead_webhook_status(
 _AUTO_STUB_TAG = "[AUTO_STUB]"
 
 
+def _allow_stub_once_per_process(dedupe_key: str) -> bool:
+    """Evita inserções duplicadas em rajada no mesmo processo (além do dedupe no banco)."""
+    now = time.monotonic()
+    with _stub_seen_guard:
+        stale = [k for k, t in _stub_seen_recent.items() if now - t > _STUB_SEEN_TTL_SEC]
+        for k in stale:
+            del _stub_seen_recent[k]
+        if dedupe_key in _stub_seen_recent:
+            return False
+        _stub_seen_recent[dedupe_key] = now
+        return True
+
+
 def ensure_auto_contact_stub_lead(
     *,
     source_external_session_id: str | None,
@@ -316,6 +334,9 @@ def ensure_auto_contact_stub_lead(
         dedupe_key = f"uid:{user_id.strip()}"
     if not dedupe_key:
         log.debug("[dim]Maria CRM stub[/] sem session/user — ignorado")
+        return
+    if not _allow_stub_once_per_process(dedupe_key):
+        log.debug("[dim]Maria CRM stub[/] dedupe local em memória · sessão=%s", dedupe_key[:48])
         return
 
     try:

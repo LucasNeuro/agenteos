@@ -120,11 +120,13 @@ app = agent_os.get_app()
 from .maria_crm.uazapi_webhook import build_uazapi_router  # noqa: E402
 from .maria_crm.historico_report import build_historico_router  # noqa: E402
 from .maria_crm.rag_ingest_webhook import build_maria_rag_ingest_router  # noqa: E402
+from .maria_crm.crm_ops_report import build_crm_ops_router  # noqa: E402
 
 from .maria_crm.rag_admin_ui import build_rag_admin_router  # noqa: E402
 
 app.include_router(build_uazapi_router(hub_agent))
 app.include_router(build_historico_router())
+app.include_router(build_crm_ops_router())
 _rag_ingest = build_maria_rag_ingest_router()
 if _rag_ingest is not None:
     app.include_router(_rag_ingest)

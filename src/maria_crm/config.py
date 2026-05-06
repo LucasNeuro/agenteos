@@ -98,6 +98,12 @@ def maria_rag_admin_reindex_after_upload() -> bool:
     return _truthy("MARIA_RAG_ADMIN_REINDEX_AFTER_UPLOAD")
 
 
+def maria_crm_ops_secret() -> str | None:
+    """Se definido, protege o endpoint GET /admin/crm/ops (?t=... ou header X-Maria-Crm-Ops-Secret)."""
+    v = os.getenv("MARIA_CRM_OPS_SECRET", "").strip()
+    return v or None
+
+
 def mem0_api_key() -> str | None:
     v = os.getenv("MEM0_API_KEY", "").strip()
     return v or None
