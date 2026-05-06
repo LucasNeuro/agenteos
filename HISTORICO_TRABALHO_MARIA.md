@@ -1,6 +1,6 @@
 # Historico de Trabalho - Mari (AgentOS + WhatsApp/UAZAPI)
 
-Ultima atualizacao: 2026-05-05 (UTC-3) — entrada modulo Arquitetura (cliente final)
+Ultima atualizacao: 2026-05-06 (UTC-3) — hardening WhatsApp + CRM + RAG
 
 ## Em linguagem simples (evolucao para leigos)
 
@@ -20,6 +20,14 @@ Resumo para quem nao programa: o que mudou em relacao a **Mari**, ao **WhatsApp*
 - **Memoria e registo:** melhorias na forma como o **telefone** do WhatsApp e a **memoria Mem0** entram na conversa, e afinacoes nos **logs** para perceber se a Mari enviou texto, botoes ou lista.
 - **Relatorio no GitHub:** experimentou-se atualizar este historico e pagina publica **por automatismo**; **nao ficou em uso.** O acordo atual e **comunicar o andamento no grupo manualmente**. O detalhe tecnico do dia 5 continua abaixo para a equipa.
 - **Novo modulo no atendimento:** a Mari passou a ter instrucoes para **projeto de arquitetura, interiores e reforma com projeto** (POP HUB Obra 10+), alem do mercado imobiliario. Na triagem inicial, o cliente pode escolher **buscar imovel, anunciar, ser corretor/imobiliaria ou projeto de arquitetura/interiores**; no ultimo caso ela qualifica com **tamanho**, **prazo** e **cidade/bairro** e regista o lead como **`cliente_projetos`** no CRM para os arquitetos homologados darem seguimento.
+- **Organizacao do repositorio:** foram removidas pastas que entraram por engano (`admin-ui` com `node_modules`, `scripts` e `.github`) para manter o projeto focado no runtime Python da Mari.
+
+### Quarta-feira, 6 de maio de 2026
+
+- **WhatsApp mais confiavel:** o webhook da UAZAPI ficou mais resistente a mensagens duplicadas e a payloads sem `messageid`, reduzindo risco de resposta repetida.
+- **CRM mais consistente:** reforcado o vinculo entre conversa e lead (sessao/contacto), com melhor dedupe e melhor leitura operacional.
+- **RAG mais estavel:** upload/reindex com controlo para evitar jobs concorrentes e novo endpoint de validacao para checar estado da base de conhecimento.
+- **Operacao e monitorizacao:** adicionados endpoints administrativos protegidos para validar saude do CRM e do RAG sem precisar entrar no codigo.
 
 ## Objetivo deste arquivo
 - Este ficheiro e o **relatorio oficial** do trabalho na **agente Mari** (codigo, playbooks, integracao WhatsApp, CRM, memoria, deploy). Trata-se tambem do registo que a equipa pode partilhar com **nao tecnicos**, quando fizer sentido.
@@ -84,6 +92,63 @@ Resumo para quem nao programa: o que mudou em relacao a **Mari**, ao **WhatsApp*
 - **`docs/playbooks/00_mari_persona_global.md`**, **`docs/playbooks/README.md`**, **`docs/GUIA_DESENVOLVIMENTO.md`**: referencia ao quarto playbook.
 - **`src/maria_crm/lead_tool.py`**: docstring com campos tipicos de **`cliente_projetos`** (alinha com `persist_lead_and_webhook` e tabela `maria_lead_cliente_projetos`).
 - Nota: o ficheiro `01_mari_mercado_imobiliario_fluxos.md` tinha estado apagado no working tree local; foi **restaurado a partir do git** para o loader nao falhar.
+
+### 22:45-23:00 (aprox.) - Limpeza estrutural do repositorio
+- Remocao da pasta **`admin-ui/`** (incluindo `node_modules/` e `dist/`) que nao fazia parte do backend da Mari.
+- Remocao da pasta **`scripts/`**.
+- Remocao da pasta **`.github/`**.
+- Objetivo: reduzir ruido no projeto e evitar manutencao de artefactos fora do escopo do runtime Python.
+
+---
+
+## 2026-05-06 (Quarta-feira)
+
+### 08:15-08:40 (aprox.) - WhatsApp/UAZAPI hardening (dedupe + resiliencia)
+- **`src/maria_crm/uazapi_dedupe.py`**:
+  - dedupe expandido para chave de evento (nao so `messageid`);
+  - suporte a prefixos `mid:` e `fp:` para idempotencia mais robusta.
+- **`src/maria_crm/uazapi_webhook.py`**:
+  - chave de dedupe por `messageid` ou fingerprint (`sha1`) quando o id nao vem no payload;
+  - tratamento de excecao global no webhook para resposta controlada (`internal_webhook_error`) e melhor observabilidade em log.
+- Resultado esperado: menor risco de processar duplicado e melhor comportamento em payloads heterogeneos da UAZAPI.
+
+### 08:40-09:05 (aprox.) - CRM consistente entre sessao e lead
+- **`src/maria_crm/lead_service.py`**:
+  - resolucao de `session_id` interno a partir de `source_external_session_id`;
+  - `persist_lead_and_webhook(...)` passa a aceitar `source_external_session_id` e tenta vincular o lead a sessao;
+  - fallback de insercao quando a coluna `source_external_session_id` (migracao 002) ainda nao existe no banco;
+  - `ensure_auto_contact_stub_lead(...)` tambem tenta gravar `session_id` quando possivel.
+- **`src/maria_crm/lead_tool.py`**: novo argumento opcional `source_external_session_id`.
+- **`src/maria_crm/lead_property_link_hook.py`**:
+  - apos `registrar_lead_no_crm`, tenta vincular lead <-> sessao externa;
+  - mantida ligacao de imoveis em rascunho ao lead.
+- Resultado esperado: trilho de dados mais coerente para auditoria, BI e operacao comercial.
+
+### 09:05-09:30 (aprox.) - RAG operacional estavel (upload + reindex + validacao)
+- **`src/maria_crm/ingest_maria_knowledge.py`**:
+  - adicionado modo single-flight (`run_maria_knowledge_ingest_singleflight`) para impedir ingest concorrente.
+- **`src/maria_crm/rag_ingest_webhook.py`** e **`src/maria_crm/rag_admin_ui.py`**:
+  - passam a usar o single-flight (se ja houver job a correr, o novo trigger e ignorado com log).
+- **`src/maria_crm/knowledge_maria.py`**:
+  - novo snapshot de saude (`maria_rag_health_snapshot`) com:
+    - estado de configuracao;
+    - contagem das tabelas `ai.maria_knowledge_contents` e `ai.maria_knowledge_vectors`;
+    - validacao opcional por query textual.
+- **`src/maria_crm/rag_admin_ui.py`**:
+  - novo endpoint `GET /admin/rag/validate?t=<secret>&q=<texto>&limit=<n>`.
+- **`.env.example`**:
+  - documentacao atualizada para endpoint de validacao RAG e relatorio operacional do CRM.
+
+### 09:30-09:40 (aprox.) - Endpoint de relatorio operacional CRM
+- Novo ficheiro **`src/maria_crm/crm_ops_report.py`**.
+- Rota protegida por segredo: **`GET /admin/crm/report?t=<secret>&hours=24`**.
+- Ativacao por env: **`MARIA_CRM_REPORT_SECRET`**.
+- Metricas expostas (JSON): sessoes, mensagens (user/assistant), leads, stubs automaticos e erros de webhook na janela.
+- **`src/agent_app.py`** atualizado para incluir o router apenas quando o segredo estiver definido.
+
+### 09:40-09:45 (aprox.) - Validacao de integridade
+- Execucao de `python -m compileall src` sem erros.
+- Verificacao de lints nos ficheiros alterados sem novos erros reportados.
 
 ---
 
