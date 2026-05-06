@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
+from dataclasses import dataclass
 from typing import Any
 
 from agno.agent import Agent
@@ -22,6 +25,62 @@ from .uazapi_ids import (
 )
 from .uazapi_media import uaz_message_is_probably_image
 from .uazapi_parse import parse_maria_reply_for_uaz
+
+_MEDIA_BATCH_TTL_SEC = 20 * 60
+_media_batch_lock = threading.Lock()
+
+
+@dataclass
+class _MediaBatchState:
+    imovel_id: str | None = None
+    total: int = 0
+    accepted: int = 0
+    rejected: int = 0
+    unknown: int = 0
+    last_reason: str | None = None
+    last_valid_summary: str | None = None
+    updated_at_monotonic: float = 0.0
+
+
+_media_batches_by_session: dict[str, _MediaBatchState] = {}
+
+
+def _cleanup_old_media_batches(now: float) -> None:
+    stale = [k for k, v in _media_batches_by_session.items() if now - v.updated_at_monotonic > _MEDIA_BATCH_TTL_SEC]
+    for k in stale:
+        del _media_batches_by_session[k]
+
+
+def _media_batch_add(session_id: str, media_ingest: Any) -> None:
+    now = time.monotonic()
+    with _media_batch_lock:
+        _cleanup_old_media_batches(now)
+        st = _media_batches_by_session.get(session_id)
+        if st is None:
+            st = _MediaBatchState()
+            _media_batches_by_session[session_id] = st
+        st.total += 1
+        st.updated_at_monotonic = now
+        if media_ingest is not None:
+            st.imovel_id = media_ingest.imovel_id
+            vp = media_ingest.valid_property_photo
+            if vp is True:
+                st.accepted += 1
+                if media_ingest.vision_summary:
+                    st.last_valid_summary = str(media_ingest.vision_summary)[:500]
+            elif vp is False:
+                st.rejected += 1
+            else:
+                st.unknown += 1
+            if media_ingest.validation_reason:
+                st.last_reason = str(media_ingest.validation_reason)[:500]
+
+
+def _media_batch_consume(session_id: str) -> _MediaBatchState | None:
+    now = time.monotonic()
+    with _media_batch_lock:
+        _cleanup_old_media_batches(now)
+        return _media_batches_by_session.pop(session_id, None)
 
 
 def _webhook_event_from_body(body: dict[str, Any]) -> str | None:
@@ -202,8 +261,10 @@ def build_uazapi_router(agent: Agent) -> APIRouter:
                 log.exception("[red]UAZAPI[/] falha ingestão imóvel/mídia — %s", e)
 
         user_turn = uaz_incoming_user_turn(data)
-        if not user_turn.strip() and probably_image:
-            user_turn = "Enviei uma foto do imóvel."
+        if probably_image and not user_turn.strip():
+            _media_batch_add(str(session_id), media_ingest)
+            log.info("[cyan]UAZAPI[/] mídia em lote · sessão=%s · aguardando fim do envio", str(session_id)[:24])
+            return {"ok": True, "skipped": "image_only_buffered"}
         if not user_turn.strip():
             log.info("[cyan]UAZAPI[/] ignorado · turno vazio (sem text/content/button)")
             return {"ok": True, "skipped": "empty_turn"}
@@ -221,6 +282,28 @@ def build_uazapi_router(agent: Agent) -> APIRouter:
             digits = user_id[3:]
             if digits.isdigit():
                 session_state["telefone_whatsapp"] = digits
+
+        batch = _media_batch_consume(str(session_id))
+        if batch is not None:
+            if batch.imovel_id:
+                session_state["maria_rascunho_imovel_id"] = batch.imovel_id
+            if batch.accepted > 0:
+                session_state["maria_ultima_imagem_valida_imovel"] = True
+                if batch.last_valid_summary:
+                    session_state["maria_ultima_imagem_resumo"] = batch.last_valid_summary
+            elif batch.rejected > 0 and batch.unknown == 0:
+                session_state["maria_ultima_imagem_valida_imovel"] = False
+                session_state.pop("maria_ultima_imagem_resumo", None)
+            else:
+                session_state["maria_ultima_imagem_valida_imovel"] = None
+            session_state["maria_ultima_imagem_validacao_motivo"] = (
+                f"Lote de fotos recebido: {batch.total} arquivo(s), "
+                f"{batch.accepted} aceito(s), {batch.rejected} rejeitado(s), {batch.unknown} sem validação."
+            )[:500]
+            if batch.last_reason:
+                session_state["maria_ultima_imagem_validacao_motivo"] = (
+                    f"{session_state['maria_ultima_imagem_validacao_motivo']} Último motivo: {batch.last_reason}"
+                )[:500]
 
         if media_ingest is not None:
             session_state["maria_rascunho_imovel_id"] = media_ingest.imovel_id

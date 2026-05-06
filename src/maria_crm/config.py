@@ -87,6 +87,17 @@ def maria_rag_storage_prefix() -> str:
     return raw if raw.endswith("/") else f"{raw}/"
 
 
+def maria_rag_admin_secret() -> str | None:
+    """Se definido, activa a UI GET /admin/rag e POST /admin/rag/upload."""
+    v = os.getenv("MARIA_RAG_ADMIN_SECRET", "").strip()
+    return v or None
+
+
+def maria_rag_admin_reindex_after_upload() -> bool:
+    """Após upload na UI admin, fila reindex completa do bucket (modo storage)."""
+    return _truthy("MARIA_RAG_ADMIN_REINDEX_AFTER_UPLOAD")
+
+
 def mem0_api_key() -> str | None:
     v = os.getenv("MEM0_API_KEY", "").strip()
     return v or None

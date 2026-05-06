@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import os
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
@@ -41,7 +42,9 @@ def build_maria_rag_ingest_router() -> APIRouter | None:
             alias="X-Maria-Rag-Ingest-Secret",
         ),
     ) -> dict[str, bool | str]:
-        if not x_maria_rag_ingest_secret or x_maria_rag_ingest_secret.strip() != secret:
+        got = (x_maria_rag_ingest_secret or "").strip().encode("utf-8")
+        exp = secret.encode("utf-8")
+        if len(got) != len(exp) or not hmac.compare_digest(got, exp):
             raise HTTPException(status_code=403, detail="Forbidden")
         background_tasks.add_task(_ingest_job)
         return {"ok": True, "queued": True}

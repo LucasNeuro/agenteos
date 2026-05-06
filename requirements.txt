@@ -5,6 +5,8 @@ agno>=2.3.13
 
 fastapi>=0.115.0
 
+python-multipart>=0.0.9
+
 mistralai>=1.0.0
 
 pgvector>=0.2.5
