@@ -24,6 +24,7 @@ from .uazapi_client import uaz_send_button_menu, uaz_send_list_menu, uaz_send_te
 from .property_ingest import ingest_property_image_from_uaz
 from .uazapi_dedupe import webhook_allow_event_key
 from .uazapi_ids import (
+    maria_expand_whatsapp_triage_turn,
     maria_user_id_from_uaz_message,
     uaz_incoming_user_turn,
     uaz_send_number_from_message,
@@ -526,6 +527,14 @@ def build_uazapi_router(agent: Agent) -> APIRouter:
                     log.exception("[red]UAZAPI[/] falha ingestão imóvel/mídia — %s", e)
 
             user_turn = uaz_incoming_user_turn(data)
+            expanded = maria_expand_whatsapp_triage_turn(user_turn)
+            if expanded != user_turn:
+                log.info(
+                    "[cyan]UAZAPI[/] triagem expandida · era=%s · agora=%s…",
+                    (user_turn[:48] + "…") if len(user_turn) > 48 else user_turn,
+                    (expanded[:72] + "…") if len(expanded) > 72 else expanded,
+                )
+                user_turn = expanded
 
             reply_id_str: str | None = None
             if uazapi_send_reply_to_incoming_message():

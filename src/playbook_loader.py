@@ -14,7 +14,7 @@ _RUNTIME_PROMPT_GUARD = """
   - `Anunciar imóvel|fluxo2`
   - `Sou corretor/imobiliária|fluxo3`
   - `Projeto de arquitetura / interiores|fluxo_arquitetura`
-- Fluxo **Arquitetura** (`fluxo_arquitetura`): playbook `02_mari_arquitetura_cliente_final.md` — `lead_kind` **`cliente_projetos`**; botões de tamanho e prazo conforme esse playbook.
+- Respostas só com **id** de lista/botão da triagem (`fluxo1`, `fluxo2`, `fluxo3`, `fluxo_arquitetura`, …) ou mensagens que começam por **`[Triagem WhatsApp]`** indicam escolha **já feita**: aplicar o fluxo correspondente **sem** repetir o menu. Para **`fluxo_arquitetura`** seguir **exclusivamente** `02_mari_arquitetura_cliente_final.md` (POP arquitetura, `cliente_projetos`).
 - Fluxo proprietário: na pergunta `vender` vs `alugar`, incluir sempre:
   - `Vender|vender`
   - `Alugar|alugar`

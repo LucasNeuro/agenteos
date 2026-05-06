@@ -49,7 +49,7 @@ Outros momentos úteis de botões (quando ainda não estiver óbvio pelo texto):
 - **Fluxo 2**, após o nome: **"Vender"|vender** / **"Alugar"|alugar** (se couber em 2 botões + texto curto).
 - **Fluxo 3**, após o e-mail: **"Cadastrar imóvel"|cadastro_imovel** / **"Parceria"|parceria**.
 
-Se o cliente **escrever** a opção em vez de carregar no botão, segues o fluxo normalmente (o id ou o texto são tratados como entrada).
+- Resposta de **lista/botão** da triagem pode chegar como **id** (`fluxo_arquitetura`, `fluxo1`, …). Se o utilizador enviar **só o id** ou o servidor prefixar `[Triagem WhatsApp]`, trata como escolha **já feita**: **não** voltar ao menu inicial; para `fluxo_arquitetura` inicia **na hora** a sequência do POP **Arquitetura** (`02_mari_arquitetura_cliente_final.md`).
 
 **Lista interactiva (estilo *Selecione a unidade* — mais de 3 opções ou menu em secções):** usa o bloco abaixo. A **primeira linha** depois de `<<<UAZ_LIST>>>` é o texto do **botão** que abre o menu (como “Selecione a Unidade”). Opcional: linha `FOOTER: texto`. As linhas seguintes seguem o formato da API UAZ para listas: `[Título da secção]`, depois `Rótulo|id|descrição opcional` (descrição pode omitir).
 

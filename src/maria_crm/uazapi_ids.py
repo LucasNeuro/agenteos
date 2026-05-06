@@ -12,6 +12,7 @@ Handlers: ``uazapi_webhook.py``, ``uazapi_client.py``, ``uazapi_parse.py``.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Mapping
 
@@ -79,20 +80,169 @@ def uaz_incoming_text(data: Mapping[str, Any]) -> str:
     return ""
 
 
+def _content_as_dict(raw: Any) -> dict[str, Any] | None:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip().startswith("{"):
+        try:
+            o = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        return o if isinstance(o, dict) else None
+    return None
+
+
+def _first_non_empty_str(*candidates: Any) -> str:
+    for v in candidates:
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+
+def _list_button_id_from_mapping(obj: Mapping[str, Any]) -> str:
+    """Extrai id de botão/lista em payloads UAZ/WhatsApp (chaves comuns)."""
+    return _first_non_empty_str(
+        obj.get("buttonOrListid"),
+        obj.get("button_or_list_id"),
+        obj.get("selectedRowId"),
+        obj.get("selectedId"),
+        obj.get("rowId"),
+        obj.get("listRowId"),
+    )
+
+
+def _dig_interactive_reply(obj: Any, depth: int = 0) -> str:
+    """Procura reply id em estruturas aninhadas (ex.: interactive / listResponse)."""
+    if depth > 5 or obj is None:
+        return ""
+    if isinstance(obj, dict):
+        got = _list_button_id_from_mapping(obj)
+        if got:
+            return got
+        for v in obj.values():
+            got = _dig_interactive_reply(v, depth + 1)
+            if got:
+                return got
+    if isinstance(obj, list):
+        for item in obj:
+            got = _dig_interactive_reply(item, depth + 1)
+            if got:
+                return got
+    return ""
+
+
 def uaz_incoming_user_turn(data: Mapping[str, Any]) -> str:
     """
     Texto a passar ao agente: mensagem normal, ID de botão/lista, ou ``convertOptions``.
+
+    A UAZ às vezes envia o id **só** dentro de ``content`` (JSON); o root pode vir sem ``text``.
     """
     t = uaz_incoming_text(data).strip()
     if t:
         return t
-    bid = data.get("buttonOrListid")
-    if isinstance(bid, str) and bid.strip():
-        return bid.strip()
+
+    bid = _first_non_empty_str(
+        data.get("buttonOrListid"),
+        data.get("button_or_list_id"),
+        data.get("selectedRowId"),
+        data.get("selectedId"),
+    )
+    if bid:
+        return bid
+
     co = data.get("convertOptions")
     if isinstance(co, str) and co.strip():
         return co.strip()
+
+    content = _content_as_dict(data.get("content"))
+    if content:
+        bid = _list_button_id_from_mapping(content)
+        if bid:
+            return bid
+        bid = _dig_interactive_reply(content.get("interactive"))
+        if bid:
+            return bid
+        bid = _dig_interactive_reply(content)
+        if bid:
+            return bid
+
+    vote_raw = data.get("vote")
+    vote_obj = _content_as_dict(vote_raw) if vote_raw is not None else None
+    if vote_obj:
+        bid = _dig_interactive_reply(vote_obj)
+        if bid:
+            return bid
+
     return ""
+
+
+def maria_expand_whatsapp_triage_turn(user_turn: str) -> str:
+    """
+    Converte IDs de lista/botão da triagem UAZ numa instrução explícita para o modelo.
+
+    Assim o playbook de arquitetura (e os fluxos 1–3) é **activado** mesmo quando o utilizador
+    só envia ``fluxo_arquitetura`` (sem texto natural).
+    """
+    s = (user_turn or "").strip()
+    if not s:
+        return s
+    if s.startswith("[Triagem WhatsApp]"):
+        return s
+
+    hints: dict[str, str] = {
+        "fluxo1": (
+            "[Triagem WhatsApp] O cliente escolheu Buscar imóvel (id fluxo1). "
+            "Aplicar o Fluxo 1 em `01_mari_mercado_imobiliario_fluxos.md` — cliente final compra/locação, modo rápido; não pedir e-mail."
+        ),
+        "fluxo2": (
+            "[Triagem WhatsApp] O cliente escolheu Anunciar imóvel (id fluxo2). "
+            "Aplicar o Fluxo 2 (proprietário) em `01_mari_mercado_imobiliario_fluxos.md`."
+        ),
+        "fluxo3": (
+            "[Triagem WhatsApp] O cliente escolheu Sou corretor/imobiliária (id fluxo3). "
+            "Aplicar o Fluxo 3 em `01_mari_mercado_imobiliario_fluxos.md`."
+        ),
+        "fluxo_arquitetura": (
+            "[Triagem WhatsApp] O cliente escolheu Projeto de arquitetura / interiores (id fluxo_arquitetura). "
+            "**Obrigatório neste turno e nos seguintes:** seguir **exclusivamente** o playbook "
+            "`02_mari_arquitetura_cliente_final.md` — saudação POP arquitetura, pedir nome, "
+            "agradecimento obrigatório após o nome, qualificação com botões UAZ de metragem e prazo, "
+            "cidade/bairro, agradecimento, encaminhamento em mensagens curtas, "
+            "e **registrar_lead_no_crm** com lead_kind **cliente_projetos** ao fechar. "
+            "**Não** tratar como compra/aluguel de imóvel pronto; **não** voltar à triagem mercado."
+        ),
+        "vender": (
+            "[Triagem WhatsApp] O cliente escolheu Vender (id vender), passo proprietário. "
+            "Continuar Fluxo 2 com operação venda."
+        ),
+        "alugar": (
+            "[Triagem WhatsApp] O cliente escolheu Alugar (id alugar), passo proprietário. "
+            "Continuar Fluxo 2 com operação locação."
+        ),
+        "cadastro_imovel": (
+            "[Triagem WhatsApp] O cliente escolheu Cadastrar imóvel (id cadastro_imovel). "
+            "Continuar subfluxo Cadastrar imóvel do Fluxo 3."
+        ),
+        "parceria": (
+            "[Triagem WhatsApp] O cliente escolheu Parceria (id parceria). "
+            "Continuar subfluxo Parceria do Fluxo 3."
+        ),
+    }
+
+    if s in hints:
+        return hints[s]
+
+    first = s.split()[0]
+    if first in hints:
+        return hints[first]
+
+    low = s.lower()
+    if "fluxo_arquitetura" in low:
+        return hints["fluxo_arquitetura"]
+    if "projeto de arquitetura" in low and "interiores" in low:
+        return hints["fluxo_arquitetura"]
+
+    return s
 
 
 def uaz_should_ignore_for_chatbot(data: Mapping[str, Any]) -> bool:
