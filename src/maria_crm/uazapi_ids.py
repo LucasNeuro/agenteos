@@ -16,6 +16,26 @@ import json
 import re
 from typing import Any, Mapping
 
+# IDs de botão/lista da triagem e subfluxos (resposta imediata; sem debounce de texto).
+MARIA_WHATSAPP_IMMEDIATE_TRIAGE_IDS: frozenset[str] = frozenset(
+    {
+        "fluxo1",
+        "fluxo2",
+        "fluxo3",
+        "fluxo_arquitetura",
+        "vender",
+        "alugar",
+        "cadastro_imovel",
+        "parceria",
+        "arq_m2_50_100",
+        "arq_m2_100_200",
+        "arq_m2_200_mais",
+        "arq_prazo_imediato",
+        "arq_prazo_90",
+        "arq_prazo_depois",
+    }
+)
+
 
 def _digits_from_jid_or_phone(raw: str) -> str:
     base = raw.strip().split("@", 1)[0]
@@ -176,6 +196,13 @@ def uaz_incoming_user_turn(data: Mapping[str, Any]) -> str:
     return ""
 
 
+# Reforço no prompt quando o webhook expande IDs UAZ — evita repetir triagem/menus errados.
+_WHATSAPP_FLOW_CONTEXT_TAIL = (
+    " Observa o **histórico** da conversa: **não** voltar ao menu de triagem de 4 opções nem repetir "
+    "botões/listas de outro passo já concluído; usa `<<<UAZ_BUTTONS>>>` / `<<<UAZ_LIST>>>` só na **decisão actual** do fluxo."
+)
+
+
 def maria_expand_whatsapp_triage_turn(user_turn: str) -> str:
     """
     Converte IDs de lista/botão da triagem UAZ numa instrução explícita para o modelo.
@@ -193,39 +220,46 @@ def maria_expand_whatsapp_triage_turn(user_turn: str) -> str:
         "fluxo1": (
             "[Triagem WhatsApp] O cliente escolheu Buscar imóvel (id fluxo1). "
             "Aplicar o Fluxo 1 em `01_mari_mercado_imobiliario_fluxos.md` — cliente final compra/locação, modo rápido; não pedir e-mail."
+            + _WHATSAPP_FLOW_CONTEXT_TAIL
         ),
         "fluxo2": (
             "[Triagem WhatsApp] O cliente escolheu Anunciar imóvel (id fluxo2). "
             "Aplicar o Fluxo 2 (proprietário) em `01_mari_mercado_imobiliario_fluxos.md`."
+            + _WHATSAPP_FLOW_CONTEXT_TAIL
         ),
         "fluxo3": (
             "[Triagem WhatsApp] O cliente escolheu Sou corretor/imobiliária (id fluxo3). "
             "Aplicar o Fluxo 3 em `01_mari_mercado_imobiliario_fluxos.md`."
+            + _WHATSAPP_FLOW_CONTEXT_TAIL
         ),
         "fluxo_arquitetura": (
             "[Triagem WhatsApp] O cliente escolheu Projeto de arquitetura / interiores (id fluxo_arquitetura). "
-            "**Obrigatório neste turno e nos seguintes:** seguir **exclusivamente** o playbook "
-            "`02_mari_arquitetura_cliente_final.md` — saudação POP arquitetura, pedir nome, "
-            "agradecimento obrigatório após o nome, qualificação com botões UAZ de metragem e prazo, "
-            "cidade/bairro, agradecimento, encaminhamento em mensagens curtas, "
-            "e **registrar_lead_no_crm** com lead_kind **cliente_projetos** ao fechar. "
-            "**Não** tratar como compra/aluguel de imóvel pronto; **não** voltar à triagem mercado."
+            "Seguir `02_mari_arquitetura_cliente_final.md` — **§5.2 continuidade**: se no histórico **já** usaste o nome do cliente "
+            "(ex.: Olá, [Nome]) ou ele já o disse, **não** repetir saudação POP nem pedir nome de novo; "
+            "**ponte curta** + ir direto a **§6.1** (botões m²). Se o nome **ainda** não existe no histórico, **uma** pergunta curta pelo nome "
+            "(sem repetir bem-vindo/Mari). Depois qualificação (m², prazo, cidade), encaminhamento curto, "
+            "**registrar_lead_no_crm** com **cliente_projetos** ao fechar. **Não** tratar como compra/aluguel pronto; **não** voltar à triagem mercado."
+            + _WHATSAPP_FLOW_CONTEXT_TAIL
         ),
         "vender": (
             "[Triagem WhatsApp] O cliente escolheu Vender (id vender), passo proprietário. "
             "Continuar Fluxo 2 com operação venda."
+            + _WHATSAPP_FLOW_CONTEXT_TAIL
         ),
         "alugar": (
             "[Triagem WhatsApp] O cliente escolheu Alugar (id alugar), passo proprietário. "
             "Continuar Fluxo 2 com operação locação."
+            + _WHATSAPP_FLOW_CONTEXT_TAIL
         ),
         "cadastro_imovel": (
             "[Triagem WhatsApp] O cliente escolheu Cadastrar imóvel (id cadastro_imovel). "
             "Continuar subfluxo Cadastrar imóvel do Fluxo 3."
+            + _WHATSAPP_FLOW_CONTEXT_TAIL
         ),
         "parceria": (
             "[Triagem WhatsApp] O cliente escolheu Parceria (id parceria). "
             "Continuar subfluxo Parceria do Fluxo 3."
+            + _WHATSAPP_FLOW_CONTEXT_TAIL
         ),
     }
 
@@ -243,6 +277,27 @@ def maria_expand_whatsapp_triage_turn(user_turn: str) -> str:
         return hints["fluxo_arquitetura"]
 
     return s
+
+
+def maria_whatsapp_text_should_debounce(
+    raw_turn: str, expanded_turn: str, debounce_after_sec: float
+) -> bool:
+    """
+    Free-text (ex.: «Olá» em várias bolhas) usa debounce quando ``debounce_after_sec > 0``.
+    Cliques de botão/lista (IDs conhecidos ou turno já expandido para triagem) respondem já.
+    """
+    if debounce_after_sec <= 0:
+        return False
+    exp = (expanded_turn or "").strip()
+    if exp.startswith("[Triagem WhatsApp]"):
+        return False
+    raw = (raw_turn or "").strip()
+    if raw in MARIA_WHATSAPP_IMMEDIATE_TRIAGE_IDS:
+        return False
+    parts = raw.split()
+    if parts and parts[0] in MARIA_WHATSAPP_IMMEDIATE_TRIAGE_IDS:
+        return False
+    return True
 
 
 def uaz_should_ignore_for_chatbot(data: Mapping[str, Any]) -> bool:

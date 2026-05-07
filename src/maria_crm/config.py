@@ -233,3 +233,17 @@ def maria_media_batch_flush_after_sec() -> float:
         return 3.5
     return max(0.0, min(v, 45.0))
 
+
+def maria_text_message_debounce_after_sec() -> float:
+    """
+    Após cada fragmento de texto (ou legenda de imagem), espera N segundos sem nova mensagem
+    do mesmo chat antes de chamar o agente — agrupa «mensagens picadas» num único turno.
+    0 = desligado (cada webhook responde na hora). Máx. 15 s.
+    """
+    raw = os.getenv("MARIA_TEXT_DEBOUNCE_SEC", "2.5").strip()
+    try:
+        v = float(raw)
+    except ValueError:
+        return 2.5
+    return max(0.0, min(v, 15.0))
+

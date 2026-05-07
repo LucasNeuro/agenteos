@@ -15,6 +15,7 @@ from fastapi import APIRouter, Body, Header, Response, status
 
 from .config import (
     maria_media_batch_flush_after_sec,
+    maria_text_message_debounce_after_sec,
     uazapi_configured,
     uazapi_send_reply_to_incoming_message,
     uazapi_webhook_secret_expected,
@@ -26,6 +27,7 @@ from .uazapi_dedupe import webhook_allow_event_key
 from .uazapi_ids import (
     maria_expand_whatsapp_triage_turn,
     maria_user_id_from_uaz_message,
+    maria_whatsapp_text_should_debounce,
     uaz_incoming_user_turn,
     uaz_send_number_from_message,
     uaz_session_id_for_maria,
@@ -51,6 +53,23 @@ class _MediaBatchState:
 
 
 _media_batches_by_session: dict[str, _MediaBatchState] = {}
+
+_TEXT_DEBOUNCE_BUFFER_TTL_SEC = 15 * 60
+
+
+@dataclass
+class _TextDebounceBuffer:
+    fragments: list[str]
+    media_ingests: list[Any]
+    last_reply_id: str | None
+    updated_at_monotonic: float = 0.0
+
+
+_text_debounce_buffers: dict[str, _TextDebounceBuffer] = {}
+_text_debounce_state_lock = threading.Lock()
+_webhook_timer_registry_lock = threading.Lock()
+_media_batch_flush_timers: dict[str, threading.Timer] = {}
+_text_debounce_timers: dict[str, threading.Timer] = {}
 
 
 def _cleanup_old_media_batches(now: float) -> None:
@@ -94,9 +113,6 @@ def _media_batch_consume(session_id: str) -> _MediaBatchState | None:
 _session_gates_guard = threading.Lock()
 _session_gates: dict[str, threading.Lock] = {}
 
-_batch_flush_registry_lock = threading.Lock()
-_batch_flush_timers: dict[str, threading.Timer] = {}
-
 
 def _session_run_gate(session_id: str) -> threading.Lock:
     sid = str(session_id)
@@ -120,10 +136,144 @@ def _holding_session_run_gate(session_id: str):
 
 def _cancel_media_batch_flush(session_id: str) -> None:
     sid = str(session_id)
-    with _batch_flush_registry_lock:
-        t = _batch_flush_timers.pop(sid, None)
+    with _webhook_timer_registry_lock:
+        t = _media_batch_flush_timers.pop(sid, None)
     if t is not None:
         t.cancel()
+
+
+def _cleanup_stale_text_debounce_buffers(now: float) -> None:
+    stale = [
+        k
+        for k, v in _text_debounce_buffers.items()
+        if now - v.updated_at_monotonic > _TEXT_DEBOUNCE_BUFFER_TTL_SEC
+    ]
+    for k in stale:
+        _text_debounce_buffers.pop(k, None)
+        with _webhook_timer_registry_lock:
+            t = _text_debounce_timers.pop(k, None)
+        if t is not None:
+            t.cancel()
+
+
+def _combine_text_fragments(parts: list[str]) -> str:
+    out: list[str] = []
+    prev_cf: str | None = None
+    for p in parts:
+        s = (p or "").strip()
+        if not s:
+            continue
+        cf = s.casefold()
+        if prev_cf is not None and cf == prev_cf:
+            continue
+        out.append(s)
+        prev_cf = cf
+    return " ".join(out)
+
+
+def _cancel_text_debounce_flush(session_id: str) -> None:
+    sid = str(session_id)
+    with _webhook_timer_registry_lock:
+        t = _text_debounce_timers.pop(sid, None)
+    if t is not None:
+        t.cancel()
+    with _text_debounce_state_lock:
+        _text_debounce_buffers.pop(sid, None)
+
+
+def _schedule_text_debounce_flush(
+    *,
+    agent: Agent,
+    user_id: str,
+    session_id: str,
+    number: str,
+    reply_id_str: str | None,
+    fragment: str,
+    media_ingest: Any | None,
+    log: Any,
+) -> None:
+    delay = maria_text_message_debounce_after_sec()
+    if delay <= 0:
+        return
+    sid = str(session_id)
+
+    def fire() -> None:
+        try:
+            with _holding_session_run_gate(sid):
+                with _text_debounce_state_lock:
+                    buf = _text_debounce_buffers.pop(sid, None)
+                if buf is None or not buf.fragments:
+                    log.info(
+                        "[cyan]UAZAPI[/] debounce texto · buffer vazio · sessão=%s",
+                        sid[:32],
+                    )
+                    return
+                user_turn = _combine_text_fragments(buf.fragments)
+                if not user_turn.strip() and buf.media_ingests:
+                    user_turn = (
+                        f"Acabei de enviar {len(buf.media_ingests)} imagem(ns) pelo WhatsApp. "
+                        "Trata o registo e responde com o próximo passo para o cliente."
+                    )
+                elif not user_turn.strip():
+                    log.info("[cyan]UAZAPI[/] debounce texto · turno vazio após junção · sessão=%s", sid[:32])
+                    return
+                reply_for_send = buf.last_reply_id
+                _cancel_media_batch_flush(sid)
+                session_state = _base_maria_session_state(user_id)
+                batch = _media_batch_consume(sid)
+                if batch is not None:
+                    _merge_media_batch_into_session_state(session_state, batch)
+                for ing in buf.media_ingests:
+                    if ing is not None:
+                        _merge_single_ingest_into_session_state(session_state, ing)
+                res = _run_uazapi_agent_reply(
+                    agent=agent,
+                    user_id=user_id,
+                    session_id=session_id,
+                    session_state=session_state,
+                    user_turn=user_turn,
+                    number=number,
+                    reply_id_str=reply_for_send,
+                    log=log,
+                )
+                if res.kind == "error":
+                    log.warning("[yellow]UAZAPI[/] debounce texto · falha · %s", res.error)
+        finally:
+            with _webhook_timer_registry_lock:
+                _text_debounce_timers.pop(sid, None)
+
+    n_frag = 0
+    with _text_debounce_state_lock:
+        now = time.monotonic()
+        _cleanup_stale_text_debounce_buffers(now)
+        buf = _text_debounce_buffers.get(sid)
+        if buf is None:
+            buf = _TextDebounceBuffer(fragments=[], media_ingests=[], last_reply_id=None)
+        frag_stripped = (fragment or "").strip()
+        if frag_stripped:
+            buf.fragments.append(fragment)
+        if media_ingest is not None:
+            buf.media_ingests.append(media_ingest)
+        if reply_id_str:
+            buf.last_reply_id = reply_id_str
+        buf.updated_at_monotonic = now
+        _text_debounce_buffers[sid] = buf
+        n_frag = len(buf.fragments)
+
+    with _webhook_timer_registry_lock:
+        old = _text_debounce_timers.pop(sid, None)
+        if old is not None:
+            old.cancel()
+        timer = threading.Timer(delay, fire)
+        timer.daemon = True
+        _text_debounce_timers[sid] = timer
+    timer.start()
+    log.info(
+        "[cyan]UAZAPI[/] texto debounce · flush em %.1fs · sessão=%s · fragmentos=%d",
+        delay,
+        sid[:24],
+        n_frag,
+    )
 
 
 def _base_maria_session_state(user_id: str) -> dict[str, Any]:
@@ -270,6 +420,7 @@ def _schedule_media_batch_flush(
 
     def fire() -> None:
         try:
+            _cancel_text_debounce_flush(sid)
             with _holding_session_run_gate(sid):
                 batch = _media_batch_consume(sid)
                 if batch is None:
@@ -297,16 +448,16 @@ def _schedule_media_batch_flush(
                 if res.kind == "error":
                     log.warning("[yellow]UAZAPI[/] flush lote · falha · %s", res.error)
         finally:
-            with _batch_flush_registry_lock:
-                _batch_flush_timers.pop(sid, None)
+            with _webhook_timer_registry_lock:
+                _media_batch_flush_timers.pop(sid, None)
 
-    with _batch_flush_registry_lock:
-        old = _batch_flush_timers.pop(sid, None)
+    with _webhook_timer_registry_lock:
+        old = _media_batch_flush_timers.pop(sid, None)
         if old is not None:
             old.cancel()
         timer = threading.Timer(delay, fire)
         timer.daemon = True
-        _batch_flush_timers[sid] = timer
+        _media_batch_flush_timers[sid] = timer
     timer.start()
     log.info(
         "[cyan]UAZAPI[/] mídia em lote · flush agendado · sessão=%s · em %.1fs",
@@ -527,6 +678,7 @@ def build_uazapi_router(agent: Agent) -> APIRouter:
                     log.exception("[red]UAZAPI[/] falha ingestão imóvel/mídia — %s", e)
 
             user_turn = uaz_incoming_user_turn(data)
+            raw_turn = user_turn
             expanded = maria_expand_whatsapp_triage_turn(user_turn)
             if expanded != user_turn:
                 log.info(
@@ -541,7 +693,10 @@ def build_uazapi_router(agent: Agent) -> APIRouter:
                 reply_id = data.get("messageid")
                 reply_id_str = str(reply_id).strip() if reply_id is not None and str(reply_id).strip() else None
 
+            debounce_sec = maria_text_message_debounce_after_sec()
+
             if probably_image and not user_turn.strip():
+                _cancel_text_debounce_flush(str(session_id))
                 _media_batch_add(str(session_id), media_ingest)
                 log.info("[cyan]UAZAPI[/] mídia em lote · sessão=%s · aguardando fim do envio", str(session_id)[:24])
                 _schedule_media_batch_flush(
@@ -557,7 +712,22 @@ def build_uazapi_router(agent: Agent) -> APIRouter:
                 log.info("[cyan]UAZAPI[/] ignorado · turno vazio (sem text/content/button)")
                 return {"ok": True, "skipped": "empty_turn"}
 
+            if maria_whatsapp_text_should_debounce(raw_turn, user_turn, debounce_sec):
+                _cancel_media_batch_flush(str(session_id))
+                _schedule_text_debounce_flush(
+                    agent=agent,
+                    user_id=user_id,
+                    session_id=str(session_id),
+                    number=number,
+                    reply_id_str=reply_id_str,
+                    fragment=user_turn,
+                    media_ingest=media_ingest,
+                    log=log,
+                )
+                return {"ok": True, "skipped": "text_debounce_buffered"}
+
             with _holding_session_run_gate(str(session_id)):
+                _cancel_text_debounce_flush(str(session_id))
                 _cancel_media_batch_flush(str(session_id))
                 session_state = _base_maria_session_state(user_id)
                 batch = _media_batch_consume(str(session_id))
