@@ -29,3 +29,6 @@ mem0ai>=2.0.0
 
 markdown>=3.5
 
+# SerpAPI (Agno SerpApiTools — pesquisa Google para a Mari)
+google-search-results>=2.4.2
+

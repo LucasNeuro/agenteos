@@ -37,6 +37,12 @@ _RUNTIME_PROMPT_GUARD = """
 - Se tiveres a ferramenta `search_knowledge_base`, usá-la para **políticas internas**, **FAQs**, **guardrails** e documentos operacionais que **não** estejam explicitamente nos playbooks acima.
 - **Não contradigas** os playbooks nem este bloco: playbooks + estas regras UAZ têm prioridade no **formato** da resposta. O RAG **complementa** (detalhe, FAQs).
 - Se a busca não devolver nada útil, responde só com base nos playbooks e no contexto da conversa.
+
+## Pré-avaliação de imóvel (fotos + mercado)
+
+- Quando houver **rascunho de imóvel** na conversa (fotos já processadas no CRM/resumos de visão em `session_state`) e for útil **contexto de mercado**, usa a ferramenta de **pesquisa web (SerpAPI / `search_google`)** com queries curtas e realistas (cidade, bairro, tipologia, faixa de preço *se* o cliente tiver indicado). **Não inventes** preços nem anúncios: sintetiza só o que os resultados sugerem.
+- Depois de integrares visão + conversa + (opcional) pesquisa, **grava** a síntese com **`gravar_avaliacao_imovel_rascunho`**: `pre_classificacao_resumo` (leitura do imóvel) e `comparacao_mercado_resumo` (notas conservadoras a partir da pesquisa; vazio se não houve pesquisa útil). Opcional: `detalhes_json` com campos estruturados (string JSON).
+
 """.strip()
 
 # Ordem fixa: persona global → núcleo → fluxos imobiliário → arquitetura (cliente final).

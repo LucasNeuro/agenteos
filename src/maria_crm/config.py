@@ -202,6 +202,16 @@ def mistral_api_key() -> str | None:
     return v or None
 
 
+def serp_api_key() -> str | None:
+    """Chave SerpAPI (Agno `SerpApiTools`); variável de ambiente como na doc Agno: SERP_API_KEY."""
+    v = os.getenv("SERP_API_KEY", "").strip()
+    return v or None
+
+
+def serp_api_configured() -> bool:
+    return bool(serp_api_key())
+
+
 def maria_vision_enabled() -> bool:
     raw = os.getenv("MARIA_VISION_ENABLED", "1").strip().lower()
     if raw in ("0", "false", "no", "off"):

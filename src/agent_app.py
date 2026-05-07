@@ -12,7 +12,7 @@ Variáveis de ambiente (ficheiro .env na raiz, opcional — carregado com python
   UAZAPI_TOKEN, UAZAPI_BASE_URL — WhatsApp via UAZAPI (envio); webhook interno POST /webhooks/uazapi
   UAZAPI_WEBHOOK_SECRET — opcional; header X-Maria-Webhook-Secret no webhook
   AGENTOS_TRACING — 1 para ligar tracing OpenTelemetry do Agno (padrão: desligado; requer pacotes extras)
-  MARIA_AUTO_STUB_WEBHOOK — se `1`, envia também o lead mínimo automático (stub) ao webhook (opcional)
+  SERP_API_KEY — SerpAPI para pesquisa web (Google via Agno SerpApiTools; opcional — ver requirements)
 """
 
 from __future__ import annotations
@@ -55,6 +55,29 @@ db = SqliteDb(db_file=os.path.normpath(_DB_PATH))
 MODEL = os.getenv("AGNO_MODEL", "mistral:mistral-large-latest")
 
 _ag_tools = [registrar_lead_no_crm, consultar_cep_viacep, gravar_endereco_imovel_crm]
+
+if maria_config.crm_configured():
+    from .maria_crm.imovel_assessment_tool import gravar_avaliacao_imovel_rascunho
+
+    _ag_tools.append(gravar_avaliacao_imovel_rascunho)
+
+if maria_config.serp_api_configured():
+    try:
+        from agno.tools.serpapi import SerpApiTools
+
+        _ag_tools.append(
+            SerpApiTools(
+                api_key=maria_config.serp_api_key(),
+                enable_search_google=True,
+                enable_search_youtube=False,
+            )
+        )
+    except ImportError:
+        get_maria_logger().warning(
+            "[yellow]SerpAPI[/]: define [cyan]SERP_API_KEY[/] mas falta o pacote — "
+            "`pip install google-search-results` (ver doc Agno SerpApiTools)."
+        )
+
 _ag_pre_hooks: list = [maria_pre_hook_canal_contacto]
 _ag_post_hooks = [
     post_log_maria_conversation_turn,
