@@ -1,6 +1,6 @@
 # Historico de Trabalho - Mari (AgentOS + WhatsApp/UAZAPI)
 
-Ultima atualizacao: 2026-05-06 (UTC-3) — hardening WhatsApp + CRM + RAG
+Ultima atualizacao: 2026-05-06 (UTC-3) — hardening WhatsApp + CRM + RAG + avaliacao interna de imovel + persona (nome/tom)
 
 ## Em linguagem simples (evolucao para leigos)
 
@@ -25,9 +25,12 @@ Resumo para quem nao programa: o que mudou em relacao a **Mari**, ao **WhatsApp*
 ### Quarta-feira, 6 de maio de 2026
 
 - **WhatsApp mais confiavel:** o webhook da UAZAPI ficou mais resistente a mensagens duplicadas e a payloads sem `messageid`, reduzindo risco de resposta repetida.
+- **Mensagens “picadas”:** quando o cliente manda o texto em varias bolhas seguidas (ex.: cidade numa, bairro noutra), o sistema **espera um instante** antes de gerar resposta, para **juntar o contexto** e evitar **duas respostas** ou perguntas repetidas.
 - **CRM mais consistente:** reforcado o vinculo entre conversa e lead (sessao/contacto), com melhor dedupe e melhor leitura operacional.
 - **RAG mais estavel:** upload/reindex com controlo para evitar jobs concorrentes e novo endpoint de validacao para checar estado da base de conhecimento.
 - **Operacao e monitorizacao:** adicionados endpoints administrativos protegidos para validar saude do CRM e do RAG sem precisar entrar no codigo.
+- **Pre-avaliacao de imovel (uso interno):** depois de condicoes favoraveis (ex.: fotos e imovel em rascunho ligados a sessao), o sistema pode **gerar e gravar** uma analise tipo “Studio” na base de dados para a equipa; **nao e obrigatorio** ter pesquisa na web configurada para isso correr — a pesquisa **melhora** o contexto quando existe chave API.
+- **Linguagem para o cliente:** reforcado para a Mari **nao usar jargao** nem mostrar “saidas tecnicas” no WhatsApp; texto voltado a **pessoa**, com **pedido de nome** quando ainda nao esta claro como tratar — **tom humano e gentil**, nao estilo formulario.
 
 ## Objetivo deste arquivo
 - Este ficheiro e o **relatorio oficial** do trabalho na **agente Mari** (codigo, playbooks, integracao WhatsApp, CRM, memoria, deploy). Trata-se tambem do registo que a equipa pode partilhar com **nao tecnicos**, quando fizer sentido.
@@ -150,23 +153,47 @@ Resumo para quem nao programa: o que mudou em relacao a **Mari**, ao **WhatsApp*
 - Execucao de `python -m compileall src` sem erros.
 - Verificacao de lints nos ficheiros alterados sem novos erros reportados.
 
+### 10:00-18:30 (aprox., sessao continuada) - WhatsApp: debounce de texto e higiene da bolha enviada
+- **Problema:** mensagens de texto **fragmentadas** (varias bolhas seguidas) podiam disparar **processamento em paralelo** ou respostas **duplicadas** / **redundantes**.
+- **`src/maria_crm/uazapi_webhook.py`**: “cauda” de debounce antes do `agent.run` (texto e batch de midia); **cancelamento** do temporizador em `finally` para nao haver corridas entre envios; agendamento de enriquecimento pos-envio quando aplicavel.
+- **`src/maria_crm/uazapi_ids.py`**: heuristicas (`maria_text_fragment_prefers_full_debounce`) para decidir quando vale **esperar** mais tempo por mais texto (digitos marcadores, varias palavras, palavra unica longa, etc.).
+- **`src/maria_crm/config.py`**: `maria_text_debounce_tail_sec()` e documentacao alinhada ao comportamento.
+- **`src/maria_crm/uazapi_parse.py`**: `strip_leaked_tool_calls_from_model_text` — remove da resposta vestigios de **chamadas a ferramentas** / texto tecnico que **nao** deve chegar ao WhatsApp; integrado no inicio de `parse_maria_reply_for_uaz`.
+- Resultado esperado: conversa **mais natural** no telemovel; cliente **nao** ve “saidas de sistema”.
+
+### 10:00-18:30 (aprox., sessao continuada) - Auto-enrich / avaliacao interna de imovel (Studio)
+- **Objetivo:** gerar e **persistir** pre-avaliacoes para apoio interno (equipa), **sem** depender do cliente pedir “contexto de mercado”; pesquisa web (**SerpAPI**) **enriquece** quando `SERP_API_KEY` existe, mas **nao** bloqueia o fluxo base.
+- **`src/maria_crm/maria_imovel_auto_enrich.py`**: corridas em fundo (`agent` com sufixo de sessao interna `::__imovel_auto_enrich`); origem gravada em `maria_imovel_assessment_source` (ex.: `mari_auto_enrich`, `mari_serp_enrich`); logs INFO para skip, cooldown e agendamento.
+- **`src/maria_crm/channel_context.py`**, **`src/maria_crm/mem0_maria.py`**, **`src/maria_crm/message_log.py`**, **`src/maria_crm/lead_stub_hook.py`**: rotas **internas** **nao** poluem Mem0 / `maria_messages` / stub de contacto como se fossem conversa normal.
+- **`src/maria_crm/imovel_assessment_tool.py`**: alinhamento de `source` no payload; melhor registo de erros HTTP ao inserir no Supabase.
+- **Base de dados:** tabela **`public.maria_imovel_studio_assessments`** (FK `imovel_id` → `maria_imoveis`); migracoes **`007_maria_imovel_studio_assessment.sql`**, **`008_maria_imovel_assessment_source.sql`** (metadados de origem).
+- **`src/maria_crm/lead_service.py`**, **`lead_tool.py`**: formulacoes **neutras** para o cliente (sem jargao tipo “lead” / “CRM” nas mensagens instrumentais).
+
+### 10:00-18:30 (aprox., sessao continuada) - Persona, guardrails e pedido de nome
+- **`src/playbook_loader.py`**: reforco UAZ — **sem jargao**, interactivos invisiveis ao olhar do cliente, hints de debounce/copia; regra **continua**: **sem nome claro** → **perguntar como tratar** com **tom o mais humano possivel** (gentileza, variacao natural; **proibido** tom burocratico); pode **combinar** pedido de nome com proximo passo do fluxo ja escolhido.
+- **`docs/playbooks/00_mari_persona_global.md`**, **`docs/playbooks/01_mari_mercado_imobiliario_fluxos.md`**: alinhamento com pedido de nome e continuidade.
+- **`docs/maria_guardrails/GUARDRAILS_MARI_CONSOLIDADO.md`**: versao **1.8** — §1.2 / §1.2d (formato + ferramentas + nome).
+- **`docs/maria_runtime_env.md`**, **`.env.example`**: variaveis relevantes (debounce, Serp opcional, relatorios admin).
+- **Nota operacional:** o prompt agregado carrega **na arranque** do processo; apos alterar playbooks/guard, **reiniciar** o servico (`run.py` / deploy).
+
 ---
 
 ## Commits recentes considerados
-- `1006ca4` - Enhance WhatsApp integration with mandatory button inclusion in decision flows
-- `c473a9e` - Implement enhanced parsing for generic options in UAZAPI
-- `e11fa9c` - Enhance UAZAPI integration with support for interactive lists and improved parsing
-- `85c5ce7` - Enhance documentation and configuration for WhatsApp integration and Mem0 functionality
-- `21ba92a` - Enhance uazapi_webhook.py with improved payload handling and event extraction
-- `5b5e5e1` - Update agent_app.py to enhance Mem0 integration logging
-- `681426f` - Refactor MariaMem0Tools for v3 API compatibility and improve logging
-- `e321352` - Enhance UAZAPI and Mem0 integration with improved payload handling and user ID management
-- `401f696` - Add Python version environment variable and clean up agent_app.py
-- `555804b` - Remove outdated playbooks for client interactions and service providers
-- `6de1015` - Update environment configuration and documentation for UAZAPI integration
-- `5ecf242` - Enhance project structure and documentation for Mercado Imobiliario
-- `37466f1` - Add Mem0 integration for persistent memory management
-- `2b841de` - first commit
+- `04ad476` - Atualiza configuracao e documentacao da persona Mari
+- `0aeddac` - Atualiza configuracao e logica de atendimento da persona Mari
+- `fb5c099` - Implementa integracao com SerpAPI para pre-avaliacao de imoveis
+- `f1e3f29` - Adiciona metadados para registro e filtragem no Mem0
+- `a72ae25` - Refatora importacoes e logica de configuracao no agent_app.py
+- `6cc7d83` - Atualiza diretrizes e logica de triagem da persona Mari
+- `9e4a02d` - Atualiza configuracao e documentacao da persona Mari
+- `107d049` - Atualiza documentacao e logica de atendimento da persona Mari
+- `11168bf` - Atualiza logica de triagem e integracao de IDs no sistema UAZ
+- `ca8415e` - Adiciona documento consolidado de guardrails operacionais para Mari
+- `7d1f8a8` - Atualiza historico de trabalho e implementa melhorias no sistema
+- `40aeab1` - Atualiza configuracao e implementa novos endpoints para operacoes do CRM
+- `f560740` - Adiciona novo endpoint para operacoes do CRM e atualiza configuracao
+- `1dee9e3` - Adiciona UI de administracao para upload de documentos RAG e atualiza configuracao
+- `c97d9b7` - Atualiza documentacao e playbooks para incluir modulo de Arquitetura
 
 ---
 
