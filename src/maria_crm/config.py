@@ -31,6 +31,18 @@ def _truthy(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def agent_os_tracing_enabled() -> bool:
+    """
+    Tracing OpenTelemetry do AgentOS (Agno).
+
+    Por omissão **desligado**: evita ``No module named 'opentelemetry.sdk'`` em produção
+    minimalista (ex.: Render). Para ligar: ``AGENTOS_TRACING=1`` e instalar no ambiente:
+    ``pip install opentelemetry-api opentelemetry-sdk openinference-instrumentation-agno``
+    (ver documentação Agno).
+    """
+    return _truthy("AGENTOS_TRACING")
+
+
 def maria_database_url_raw() -> str | None:
     """URL Postgres directa (não confundir com SUPABASE_URL da API REST)."""
     for key in ("MARIA_DATABASE_URL", "SUPABASE_DATABASE_URL", "DATABASE_URL"):
@@ -43,7 +55,12 @@ def maria_database_url_raw() -> str | None:
 def maria_postgres_url_for_agno() -> str | None:
     """
     Normaliza URL para SQLAlchemy + psycopg3 (`postgresql+psycopg://`).
-    Preferir sessão directa (porta 5432) em Supabase para ORM; pooler 6543 pode dar stress em alguns drivers.
+
+    **Render / IPv6:** o host directo ``db.<ref>.supabase.co:5432`` pode resolver só para
+    IPv6; muitas redes dão ``Network is unreachable``. Usa o **Connection pooler** do
+    Supabase (host ``aws-0-<região>.pooler.supabase.com``, porta **6543**, utilizador
+    ``postgres.<PROJECT_REF>``) — ver Dashboard Supabase → Database → Connection string
+    (Session pooler ou Transaction pooler).
     """
     raw = maria_database_url_raw()
     if not raw:

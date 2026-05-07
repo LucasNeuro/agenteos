@@ -11,7 +11,7 @@ Variáveis de ambiente (ficheiro .env na raiz, opcional — carregado com python
   MEM0_API_KEY — Mem0 na nuvem (ligado automaticamente se definido; MARIA_USE_MEM0=0 para desligar)
   UAZAPI_TOKEN, UAZAPI_BASE_URL — WhatsApp via UAZAPI (envio); webhook interno POST /webhooks/uazapi
   UAZAPI_WEBHOOK_SECRET — opcional; header X-Maria-Webhook-Secret no webhook
-  MARIA_MEM0_APPEND_INFER — opcional; `1` para inferência Mem0 no arquivo de turnos (padrão: desligado = mais visível no dashboard)
+  AGENTOS_TRACING — 1 para ligar tracing OpenTelemetry do Agno (padrão: desligado; requer pacotes extras)
   MARIA_AUTO_STUB_WEBHOOK — se `1`, envia também o lead mínimo automático (stub) ao webhook (opcional)
 """
 
@@ -38,7 +38,7 @@ from agno.os import AgentOS
 from .playbook_loader import load_maria_playbook
 from .maria_crm.knowledge_maria import try_build_maria_knowledge_optional
 from .maria_crm.channel_context import maria_pre_hook_canal_contacto
-from .maria_crm.config import mem0_api_key, mem0_configured, use_mem0_integration
+from .maria_crm.config import agent_os_tracing_enabled, mem0_api_key, mem0_configured, use_mem0_integration
 from .maria_crm.imovel_endereco_tool import consultar_cep_viacep, gravar_endereco_imovel_crm
 from .maria_crm.lead_property_link_hook import post_link_maria_imoveis_to_lead
 from .maria_crm.lead_stub_hook import post_ensure_maria_contact_stub_lead
@@ -112,7 +112,7 @@ hub_agent = Agent(
 agent_os = AgentOS(
     name="hub-obra-agentos",
     agents=[hub_agent],
-    tracing=True,
+    tracing=agent_os_tracing_enabled(),
 )
 
 app = agent_os.get_app()

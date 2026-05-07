@@ -47,7 +47,7 @@ O ficheiro [`src/agent_app.py`](../src/agent_app.py) define:
 **Playbooks (POP Mercado Imobiliário + Arquitetura):** [`docs/playbooks/`](../docs/playbooks/) — **quatro** ficheiros ativos (`00_mari_persona_global.md`, `00_mari_mercado_imobiliario_core.md`, `01_mari_mercado_imobiliario_fluxos.md`, `02_mari_arquitetura_cliente_final.md`), carregados por ordem em [`src/playbook_loader.py`](../src/playbook_loader.py). Outros `.md` estão em `docs/playbooks/arquivo/` e não entram no prompt.
 - `SqliteDb` em `tmp/agentos.db` (sessões e histórico locais).
 - `timezone_identifier` América/São Paulo; histórico alargado para o modelo não repetir nome/e-mail.
-- `AgentOS` com `tracing=True` à volta da mesma base.
+- `AgentOS` com tracing **desligado por omissão** (`AGENTOS_TRACING=1` + pacotes OpenTelemetry para ligar — ver `.env.example`).
 
 - **Memória Agno:** só **Mistral**. Usa-se **memória agentica** (`enable_agentic_memory=True`): a Mari tem a ferramenta `update_user_memory` e deve usá‑la quando o utilizador der factos estáveis (nome, preferências, etc.). O painel **Memory** lê `agno_memories` no SQLite (`tmp/agentos.db`). **Sem OpenAI** neste agente.
 - **Mem0 (nuvem):** com **`MEM0_API_KEY`** definida, a integração Mem0 **liga-se** (uso típico em produção com WhatsApp). Para desligar: `MARIA_USE_MEM0=0`. O arquivo automático de turnos usa por omissão **`infer=False`** no API Mem0 (mais linhas visíveis no dashboard); `MARIA_MEM0_APPEND_INFER=1` recupera o modo com inferência. Convive com **memória agentica** no Agno (`update_user_memory` + Mem0).
