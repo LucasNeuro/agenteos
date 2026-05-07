@@ -2,8 +2,10 @@
 Mem0 (nuvem) — memória persistente por contacto (ex.: WhatsApp).
 
 O Agno ``Mem0Tools`` usa ``user_id=...`` em ``search``/``get_all``, mas o cliente
-``mem0ai`` v3 exige ``filters`` com ``user_id``. Esta camada corrige isso e liga
-pré/pós-hooks para contexto e arquivo automático de turnos.
+``mem0ai`` v3 exige ``filters`` com ``user_id``. Esta camada corrige isso, anexa
+**metadata** em cada ``add`` (origem Mari, tipo de registo, canal quando conhecido)
+para o dashboard Mem0 e para filtros futuros, e liga pré/pós-hooks para contexto e
+arquivo automático de turnos.
 """
 
 from __future__ import annotations
@@ -25,6 +27,28 @@ from .rich_logging import get_maria_logger
 
 def _filters_for_user(user_id: str) -> dict[str, str]:
     return {"user_id": str(user_id)}
+
+
+def _maria_mem0_metadata_for_turn(session_state: dict[str, Any] | None) -> dict[str, str]:
+    """
+    Tags Mem0 (chave → valor) para filtrar e ler no dashboard.
+    Não substitui ``user_id`` nos filtros da API — complementa o registo.
+    """
+    st = session_state or {}
+    ch = st.get("origem_canal")
+    channel = str(ch).strip() if ch else "unknown"
+    return {
+        "source": "agenteos_mari",
+        "kind": "conversation_turn",
+        "channel": channel,
+    }
+
+
+def _maria_mem0_metadata_tool_add() -> dict[str, str]:
+    return {
+        "source": "agenteos_mari",
+        "kind": "explicit_memory_tool",
+    }
 
 
 def _recall_start_iso(days: int) -> str:
@@ -70,6 +94,7 @@ class MariaMem0Tools(Mem0Tools):
                 messages_list,
                 user_id=str(resolved_user_id),
                 infer=self.infer,
+                metadata=_maria_mem0_metadata_tool_add(),
             )
             return json.dumps(result)
         except Exception as e:
@@ -282,6 +307,7 @@ def maria_mem0_post_append_turn(
             [{"role": "user", "content": blob}],
             user_id=str(uid),
             infer=mem0_append_infer(),
+            metadata=_maria_mem0_metadata_for_turn(st),
         )
         n = _count_mem0_add_results(result)
         log.info(
