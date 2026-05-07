@@ -139,6 +139,33 @@ def use_mem0_integration() -> bool:
     return True
 
 
+def maria_agno_session_summaries_enabled() -> bool:
+    """
+    Resumo rolante da sessão Agno no contexto (conversas longas).
+
+    Por omissão **ligado**. Desliga com ``MARIA_AGNO_SESSION_SUMMARIES=0``.
+    """
+    raw = os.getenv("MARIA_AGNO_SESSION_SUMMARIES", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def maria_agno_always_user_memories_enabled() -> bool:
+    """
+    Modo **Always** (Agno): após cada mensagem do utilizador, extrair memórias para o ``user_id``
+    no SQLite do agente (``tmp/agentos.db``), além da memória **agentica** (``update_user_memory``).
+
+    - ``MARIA_AGNO_ALWAYS_USER_MEMORIES=1`` — força ligado (inclui com Mem0; **dois** extractors por turno).
+    - ``MARIA_AGNO_ALWAYS_USER_MEMORIES=0`` — força desligado.
+    - Se omitido: **ligado** sem Mem0 (memória local útil); **desligado** com Mem0 (evita custo duplicado).
+    """
+    raw = os.getenv("MARIA_AGNO_ALWAYS_USER_MEMORIES", "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return not use_mem0_integration()
+
+
 def mem0_recall_days() -> int:
     raw = os.getenv("MARIA_MEM0_RECALL_DAYS", "15").strip()
     try:

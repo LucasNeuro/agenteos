@@ -9,6 +9,8 @@ Variáveis de ambiente (ficheiro .env na raiz, opcional — carregado com python
   MARIA_KNOWLEDGE_ENABLED — 1 para Agentic RAG (Knowledge + pgvector no Supabase; migração 005)
   WEBHOOK_MARIA_LEADS_URL — POST do cartão lead (opcional; ex.: n8n CARTÕES_LEADS-MARIA-WENDEL)
   MEM0_API_KEY — Mem0 na nuvem (ligado automaticamente se definido; MARIA_USE_MEM0=0 para desligar)
+  MARIA_AGNO_ALWAYS_USER_MEMORIES — extração automática de memórias Agno (SQLite); ver .env.example
+  MARIA_AGNO_SESSION_SUMMARIES — resumo de sessão no contexto (padrão ligado); 0 para desligar
   UAZAPI_TOKEN, UAZAPI_BASE_URL — WhatsApp via UAZAPI (envio); webhook interno POST /webhooks/uazapi
   UAZAPI_WEBHOOK_SECRET — opcional; header X-Maria-Webhook-Secret no webhook
   AGENTOS_TRACING — 1 para ligar tracing OpenTelemetry do Agno (padrão: desligado; requer pacotes extras)
@@ -44,6 +46,7 @@ from .maria_crm.lead_property_link_hook import post_link_maria_imoveis_to_lead
 from .maria_crm.lead_stub_hook import post_ensure_maria_contact_stub_lead
 from .maria_crm.lead_tool import registrar_lead_no_crm
 from .maria_crm.message_log import post_log_maria_conversation_turn
+from .maria_crm.agno_memory_maria import build_maria_memory_manager
 
 # Pastas relativas à raiz do projeto (executar uvicorn a partir da raiz)
 _DB_PATH = os.path.join(os.path.dirname(__file__), "..", "tmp", "agentos.db")
@@ -107,23 +110,25 @@ elif maria_config.mem0_configured():
         "([dim]MARIA_USE_MEM0=0[/]). Não há add/search de memórias — altera para [bold]1[/] ou remove a variável."
     )
 
-# Memórias Agno: só Mistral — memória **agentica** (`update_user_memory` na conversa),
-# em vez do extrator em background (mesmo modelo, tool-calling mais fiável no passo principal).
+# Memórias Agno (SQLite): memória **agentica** (tool ``update_user_memory``) + extração **Always**
+# opcional (``MARIA_AGNO_ALWAYS_USER_MEMORIES`` / padrão sem Mem0) e resumos de sessão (``MARIA_AGNO_SESSION_SUMMARIES``).
 _maria_knowledge = try_build_maria_knowledge_optional()
 
 hub_agent = Agent(
     name="HUB Obra 10+ (Mari)",
     model=MODEL,
     db=db,
+    memory_manager=build_maria_memory_manager(),
     instructions=load_maria_playbook(),
     tools=_ag_tools,
     pre_hooks=_ag_pre_hooks or None,
     post_hooks=_ag_post_hooks,
     knowledge=_maria_knowledge,
     search_knowledge=bool(_maria_knowledge),
-    enable_user_memories=False,
+    enable_user_memories=maria_config.maria_agno_always_user_memories_enabled(),
     enable_agentic_memory=True,
     add_memories_to_context=True,
+    enable_session_summaries=maria_config.maria_agno_session_summaries_enabled(),
     add_session_state_to_context=True,
     markdown=True,
     add_datetime_to_context=True,
