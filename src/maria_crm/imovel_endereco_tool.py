@@ -43,7 +43,7 @@ def _rest_patch_imovel(imovel_id: str, patch: dict[str, Any]) -> None:
 def consultar_cep_viacep(cep: str) -> str:
     """
     Consulta o CEP na API pública ViaCEP (https://viacep.com.br/) e devolve um resumo em português
-    para confirmares com o cliente. **Não grava** no CRM — só lê.
+    para confirmares com o cliente. **Não grava** na base — só lê.
 
     Usa no fim do fluxo de cadastro de imóvel, depois do cliente informar o CEP (8 dígitos).
     """
@@ -78,7 +78,10 @@ def gravar_endereco_imovel_crm(
     """
     log = get_maria_logger()
     if not crm_configured():
-        return "CRM não configurado (Supabase). Não foi possível gravar o endereço."
+        return (
+            "Interno: não foi possível guardar o endereço (servidor sem base configurada). "
+            "Ao cliente: pede para tentar mais tarde — sem detalhe técnico."
+        )
 
     iid = (imovel_id or "").strip()
     if not iid:
@@ -124,12 +127,13 @@ def gravar_endereco_imovel_crm(
         _rest_patch_imovel(iid, patch)
     except Exception as e:  # noqa: BLE001
         log.exception("[red]maria_imoveis[/] patch endereço falhou")
-        return f"Erro ao gravar no CRM: {e}"[:500]
+        return f"Interno: erro ao guardar endereço ({e})"[:500]
 
     resumo = formatar_resumo_viacep_pt(data)
     log.info("[green]Maria CRM ✓[/] endereço gravado · imovel=[cyan]%s[/]", iid[:8])
     return (
-        f"Endereço gravado no rascunho do imóvel. ViaCEP: {resumo}. "
+        f"Interno: endereço guardado no rascunho. ViaCEP: {resumo}. "
         f"Número: {(numero or 'Não informado').strip()}. "
-        "Indica ao cliente que o corretor ou a imobiliária vai confirmar o cadastro final."
+        "Ao cliente: confirma em linguagem natural que recebeste o endereço e que o corretor ou a imobiliária "
+        "valida tudo — sem «rascunho», «UUID» ou jargão técnico."
     )

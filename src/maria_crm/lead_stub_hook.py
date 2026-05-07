@@ -7,7 +7,7 @@ from typing import Any
 from agno.session.agent import AgentSession
 from agno.run.agent import RunOutput
 
-from .channel_context import _session_state_from_hook_kwargs
+from .channel_context import _session_state_from_hook_kwargs, maria_internal_background_run_from_kwargs
 from .lead_service import ensure_auto_contact_stub_lead
 
 
@@ -44,6 +44,8 @@ def post_ensure_maria_contact_stub_lead(
         return
 
     st = session_state if isinstance(session_state, dict) else _session_state_from_hook_kwargs(kwargs)
+    if maria_internal_background_run_from_kwargs({}, session_state=st):
+        return
 
     ext = (session.session_id if session is not None else None) or run_output.session_id
     phone = None

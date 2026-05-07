@@ -8,7 +8,7 @@ import httpx
 from agno.session.agent import AgentSession
 from agno.run.agent import RunOutput
 
-from .channel_context import _session_state_from_hook_kwargs
+from .channel_context import _session_state_from_hook_kwargs, maria_internal_background_run_from_kwargs
 from .config import crm_configured, supabase_service_role_key, supabase_url
 from .rich_logging import get_maria_logger
 
@@ -166,6 +166,9 @@ def post_log_maria_conversation_turn(
         log.debug(
             "[dim]Maria CRM · avulso[/dim] [yellow]Supabase não configurado[/] — sem gravação de mensagens"
         )
+        return
+    if maria_internal_background_run_from_kwargs(kwargs):
+        log.debug("[dim]Maria CRM[/] corrida interna — sem maria_messages")
         return
     try:
         external_id = session.session_id if session is not None else run_output.session_id

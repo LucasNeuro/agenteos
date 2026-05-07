@@ -21,7 +21,7 @@ from agno.tools.mem0 import Mem0Tools
 from mem0.client.main import MemoryClient
 
 from .config import mem0_api_key, mem0_append_infer, mem0_configured, mem0_recall_days
-from .channel_context import _session_state_from_hook_kwargs
+from .channel_context import _session_state_from_hook_kwargs, maria_internal_background_run_from_kwargs
 from .rich_logging import get_maria_logger
 
 
@@ -270,6 +270,9 @@ def maria_mem0_post_append_turn(
     """
     log = get_maria_logger()
     if not mem0_configured():
+        return
+    if maria_internal_background_run_from_kwargs(kwargs, session_state=session_state):
+        log.debug("[dim]Maria Mem0[/] corrida interna — sem append de turno")
         return
     st = session_state if isinstance(session_state, dict) else _session_state_from_hook_kwargs(kwargs)
     uid = resolve_maria_mem0_user_id(

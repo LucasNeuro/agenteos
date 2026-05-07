@@ -29,6 +29,7 @@ from .uazapi_dedupe import webhook_allow_event_key
 from .uazapi_ids import (
     maria_expand_whatsapp_triage_turn,
     maria_user_id_from_uaz_message,
+    maria_text_fragment_prefers_full_debounce,
     maria_whatsapp_text_should_debounce,
     uaz_incoming_user_turn,
     uaz_send_number_from_message,
@@ -37,6 +38,7 @@ from .uazapi_ids import (
 )
 from .uazapi_media import uaz_message_is_probably_image
 from .uazapi_parse import parse_maria_reply_for_uaz
+from .maria_imovel_auto_enrich import schedule_silent_mari_imovel_market_enrichment
 
 _MEDIA_BATCH_TTL_SEC = 20 * 60
 _media_batch_lock = threading.Lock()
@@ -261,11 +263,13 @@ def _schedule_text_debounce_flush(
         buf.updated_at_monotonic = now
         _text_debounce_buffers[sid] = buf
         n_frag = len(buf.fragments)
+        first_frag = (buf.fragments[0] or "").strip() if buf.fragments else ""
         single_short = (
             n_frag == 1
             and not buf.media_ingests
-            and bool(buf.fragments)
-            and len((buf.fragments[0] or "").strip()) <= maria_text_debounce_short_max_chars()
+            and bool(first_frag)
+            and len(first_frag) <= maria_text_debounce_short_max_chars()
+            and not maria_text_fragment_prefers_full_debounce(buf.fragments[0])
         )
 
     short_w = maria_text_debounce_short_after_sec()
@@ -415,6 +419,13 @@ def _run_uazapi_agent_reply(
             error=str(e),
         )
 
+    schedule_silent_mari_imovel_market_enrichment(
+        agent=agent,
+        user_id=user_id,
+        session_id=session_id,
+        session_state=session_state,
+        last_user_turn=user_turn,
+    )
     return _UazAgentRunResult(kind="sent")
 
 

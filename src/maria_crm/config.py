@@ -212,6 +212,31 @@ def serp_api_configured() -> bool:
     return bool(serp_api_key())
 
 
+def maria_imovel_auto_enrich_enabled() -> bool:
+    """
+    Após resposta WhatsApp com rascunho de imóvel + foto válida: pesquisa Serp + gravar avaliação (sem nova mensagem ao cliente).
+
+    Por omissão ligado quando CRM (Supabase) e SERP_API_KEY estão configurados.
+    Defina MARIA_IMOVEL_AUTO_ENRICH_ENABLED=0 para desligar.
+    """
+    raw = os.getenv("MARIA_IMOVEL_AUTO_ENRICH_ENABLED", "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    if not crm_configured() or not serp_api_configured():
+        return False
+    return True
+
+
+def maria_imovel_auto_enrich_cooldown_sec() -> float:
+    """Mínimo de segundos entre corridas automáticas de enriquecimento por mesmo imovel_id (evita custo Serp em rajadas)."""
+    raw = os.getenv("MARIA_IMOVEL_AUTO_ENRICH_COOLDOWN_SEC", "300").strip()
+    try:
+        v = float(raw)
+    except ValueError:
+        v = 300.0
+    return max(60.0, min(v, 86_400.0))
+
+
 def maria_vision_enabled() -> bool:
     raw = os.getenv("MARIA_VISION_ENABLED", "1").strip().lower()
     if raw in ("0", "false", "no", "off"):
@@ -267,11 +292,11 @@ def maria_text_message_debounce_after_sec() -> float:
     do mesmo chat antes de chamar o agente — agrupa «mensagens picadas» num único turno.
     0 = desligado (cada webhook responde na hora). Máx. 15 s.
     """
-    raw = os.getenv("MARIA_TEXT_DEBOUNCE_SEC", "1.25").strip()
+    raw = os.getenv("MARIA_TEXT_DEBOUNCE_SEC", "2.85").strip()
     try:
         v = float(raw)
     except ValueError:
-        return 1.25
+        return 2.85
     return max(0.0, min(v, 15.0))
 
 

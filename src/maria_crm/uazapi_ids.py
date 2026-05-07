@@ -279,6 +279,64 @@ def maria_expand_whatsapp_triage_turn(user_turn: str) -> str:
     return s
 
 
+_FULL_DEBOUNCE_ACK_RE = re.compile(
+    r"(?i)^(ok|beleza|sim|não|nao|obrigad|vlw|valeu|perfeito|certo|combinado|pode ser)\b"
+)
+_GREETING_OR_SHORT_CHAT_RE = re.compile(
+    r"(?i)^(bom|boa)\s+(dia|tarde|noite)\b|^(oi|ol[aá]|ola|hey)\b"
+)
+
+
+def maria_text_fragment_prefers_full_debounce(fragment: str) -> bool:
+    """
+    Quando ``True``, um único fragmento **não** usa o debounce «curto» (ex.: 0,55s):
+    o utilizador costuma estar a enviar mais bolhas a seguir (dados de imóvel, cidade+m², etc.).
+    """
+    t = (fragment or "").strip()
+    if not t:
+        return False
+    if any(ch.isdigit() for ch in t):
+        return True
+    low = t.casefold()
+    markers = (
+        "metro",
+        "metros",
+        "m²",
+        "m2",
+        "mm2",
+        "mil",
+        "reais",
+        "real",
+        "r$",
+        "bairro",
+        "valor",
+        "preço",
+        "preco",
+        "imóvel",
+        "imovel",
+        "rua",
+        "cep",
+        "apto",
+        "apartamento",
+        "casa",
+        "sala",
+        "quarto",
+        "são paulo",
+        "sao paulo",
+        "rio de janeiro",
+    )
+    if any(m in low for m in markers):
+        return True
+    parts = t.split()
+    if len(parts) >= 2:
+        if _GREETING_OR_SHORT_CHAT_RE.match(t):
+            return False
+        if _FULL_DEBOUNCE_ACK_RE.match(t):
+            return False
+        return True
+    return False
+
+
 def maria_whatsapp_text_should_debounce(
     raw_turn: str, expanded_turn: str, debounce_after_sec: float
 ) -> bool:

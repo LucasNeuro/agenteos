@@ -168,8 +168,9 @@ def persist_lead_and_webhook(
     if not crm_configured():
         log.warning("[yellow]registrar_lead[/] — Supabase não configurado; lead não gravado")
         return (
-            "CRM não configurado: defina SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY no .env. "
-            "Lead não foi gravado."
+            "Interno: Supabase não configurado (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY). "
+            "Nada foi guardado. Ao cliente: pede desculpa breve e diz que pode tentar mais tarde — "
+            "sem detalhe técnico."
         )
 
     if lead_kind not in _ALLOWED_KINDS:
@@ -222,7 +223,10 @@ def persist_lead_and_webhook(
     inserted = _insert_lead_row_best_effort(lead_row, log=log)
     if not inserted:
         log.error("[red]registrar_lead[/] — Supabase não devolveu id do lead")
-        return "Erro: Supabase não devolveu o registo do lead."
+        return (
+            "Interno: erro ao guardar na base. Ao cliente: mensagem breve de desculpa, "
+            "oferece tentar de novo — sem «lead» nem «Supabase»."
+        )
     lead_id = inserted[0]["id"]
 
     detail: dict[str, Any] = {"lead_id": lead_id}
@@ -294,8 +298,10 @@ def persist_lead_and_webhook(
                 lead_id,
             )
             return (
-                f"Lead gravado no Supabase (id={lead_id}). Falha ao enviar webhook: {webhook_err}. "
-                "Corrija WEBHOOK_MARIA_LEADS_URL ou tente de novo."
+                f"Interno: dados guardados na base (ref. {str(lead_id)[:8]}…), mas a notificação à equipa falhou "
+                f"({webhook_err[:200]}). Corrigir WEBHOOK_MARIA_LEADS_URL se necessário. "
+                "Ao cliente: mensagem calma — informações recebidas, equipa em contacto em breve — "
+                "sem «webhook», «Supabase» nem códigos de erro."
             )
     else:
         log.info(
@@ -304,12 +310,13 @@ def persist_lead_and_webhook(
             lead_kind,
         )
 
-    wh_msg = (
-        f" Webhook enviado (HTTP {webhook_status})."
-        if webhook_url and webhook_status is not None
-        else " Webhook não configurado (WEBHOOK_MARIA_LEADS_URL vazio) — apenas Supabase."
+    return (
+        "Dados do cliente guardados — a equipa pode dar seguimento ao pedido. "
+        "Ao responder **ao cliente**: usa português simples e acolhedor; **não** repitas esta mensagem, "
+        "**não** uses «lead», «CRM», «cadastrado no sistema», «registo técnico» nem IDs. "
+        "Preferir: que já recebeste as informações, que estão com a equipa, que um corretor especialista "
+        "entra em contacto em breve — conforme o fluxo."
     )
-    return f"Lead registado no CRM (id={lead_id}).{wh_msg}"
 
 
 def attach_lead_to_session_by_external_id(*, lead_id: str, external_session_id: str) -> bool:

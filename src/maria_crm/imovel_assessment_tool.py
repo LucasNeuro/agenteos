@@ -34,14 +34,20 @@ def gravar_avaliacao_imovel_rascunho(
     """
     log = get_maria_logger()
     if not crm_configured():
-        return "CRM não configurado — não é possível gravar a avaliação."
+        return (
+            "Interno: não foi possível guardar a análise (ambiente sem base configurada). "
+            "Ao cliente: não menciones detalhe técnico."
+        )
 
     st = _session_state_from_hook_kwargs(kwargs)
     if not isinstance(st, dict):
         return "Erro: estado de sessão indisponível."
     iid = (str(st.get("maria_rascunho_imovel_id") or "")).strip()
     if not iid:
-        return "Não há imóvel em rascunho na sessão. Confirme fotos no CRM ou o contexto antes de gravar."
+        return (
+            "Interno: falta rascunho de imóvel na sessão (fotos/contexto). "
+            "Ao cliente: pede o que falta no fluxo, sem «CRM»."
+        )
 
     pre = (pre_classificacao_resumo or "").strip()
     if not pre:
@@ -90,7 +96,10 @@ def gravar_avaliacao_imovel_rascunho(
             log.info("[dim]Avaliação imóvel[/] gravada sem coluna assessment_source (aplica migração 008)")
         except Exception as e2:  # noqa: BLE001
             log.warning("[yellow]Avaliação imóvel[/] falha ao gravar — %s", e2)
-            return f"Falha ao gravar avaliação no CRM: {e2!s}"[:500]
+            return f"Interno: falha ao guardar análise ({e2!s})"[:500]
 
     log.info("[green]Avaliação imóvel ✓[/] imovel=[cyan]%s[/] id=[cyan]%s[/]", iid[:8], aid[:8] or "?")
-    return f"Avaliação gravada no CRM (registo {aid})."
+    return (
+        "Análise guardada para a equipa rever. "
+        "Ao cliente só menciona se fizer sentido, em linguagem simples — sem «CRM» nem códigos."
+    )

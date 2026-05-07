@@ -29,11 +29,14 @@ def registrar_lead_no_crm(
     source_external_session_id: str = "",
 ) -> str:
     """
-    Regista o lead no mini CRM (Supabase) e envia o cartão JSON ao webhook se configurado.
+    Regista o contacto no backoffice (Supabase) e notifica a equipa via webhook se configurado.
 
     **Obrigatório ao encerrar** um fluxo útil (POP): chamar **neste turno** após encaminhamento ao humano/corretor
     ou após qualificação mínima — mesmo com dados parciais (usa "Não informado"). Um registo por fluxo encerrado,
     salvo correção explícita do cliente. Em WhatsApp, quando o estado de sessão traz **telefone_whatsapp**, usa-o em **telefone**.
+
+    A **mensagem de retorno** desta função é orientação interna: **não** a copies para o cliente; traduz em frases humanas,
+    sem jargão («lead», «CRM», «sistema», IDs).
 
     - **lead_kind**: `cliente_imobiliario` | `cliente_projetos` | `prestador_servico` | `imobiliaria_corretor`
     - **potencial**: `ALTO` | `MEDIO` | `BAIXO`
