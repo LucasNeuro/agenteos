@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import httpx
+
 from .channel_context import _session_state_from_hook_kwargs
 from .config import crm_configured
 from .property_ingest import _rest_insert
@@ -53,6 +55,10 @@ def gravar_avaliacao_imovel_rascunho(
     if not pre:
         return "O campo pre_classificacao_resumo não pode estar vazio."
 
+    src_tag = (str(st.get("maria_imovel_assessment_source") or "")).strip() or "mari_serp"
+    if len(src_tag) > 64:
+        src_tag = "mari_serp"
+
     extra: dict[str, Any] = {}
     dj = (detalhes_json or "").strip()
     if dj:
@@ -66,7 +72,7 @@ def gravar_avaliacao_imovel_rascunho(
             extra["detalhes_raw"] = dj[:8000]
 
     payload: dict[str, Any] = {
-        "source": "mari_serp",
+        "source": src_tag,
         "pre_classificacao": pre,
         "comparacao_mercado": (comparacao_mercado_resumo or "").strip(),
         **extra,
@@ -82,12 +88,40 @@ def gravar_avaliacao_imovel_rascunho(
         "source_image_urls": [],
         "status": "completed",
         "error": None,
-        "assessment_source": "mari_serp",
+        "assessment_source": src_tag,
     }
 
     try:
         ins = _rest_insert("maria_imovel_studio_assessments", row)
         aid = str(ins[0].get("id", ""))
+    except httpx.HTTPStatusError as e:
+        detail = ""
+        try:
+            detail = (e.response.text or "")[:900]
+        except Exception:
+            pass
+        log.warning(
+            "[yellow]Avaliação imóvel[/] HTTP %s — %s · corpo=%s",
+            e.response.status_code,
+            e,
+            detail or "—",
+        )
+        row.pop("assessment_source", None)
+        try:
+            ins = _rest_insert("maria_imovel_studio_assessments", row)
+            aid = str(ins[0].get("id", ""))
+            log.info("[dim]Avaliação imóvel[/] gravada sem coluna assessment_source (aplica migração 008)")
+        except httpx.HTTPStatusError as e2:
+            d2 = ""
+            try:
+                d2 = (e2.response.text or "")[:900]
+            except Exception:
+                pass
+            log.warning("[yellow]Avaliação imóvel[/] falha HTTP — %s · %s", e2, d2 or "—")
+            return f"Interno: falha ao guardar análise (HTTP {e2.response.status_code})"[:500]
+        except Exception as e2:  # noqa: BLE001
+            log.warning("[yellow]Avaliação imóvel[/] falha ao gravar — %s", e2)
+            return f"Interno: falha ao guardar análise ({e2!s})"[:500]
     except Exception as e:  # noqa: BLE001
         row.pop("assessment_source", None)
         try:

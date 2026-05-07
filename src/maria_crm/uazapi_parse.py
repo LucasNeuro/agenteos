@@ -18,6 +18,72 @@ _LIST_END = "<<<END_UAZ_LIST>>>"
 # Triagem POP: o modelo por vezes usa negrito Markdown em vez do bloco UAZ.
 _TRIAGE_IDS = frozenset({"fluxo1", "fluxo2", "fluxo3"})
 
+# Chamadas coladas pelo modelo no texto — nunca devem ir para o WhatsApp (processo interno).
+_LEAKED_TOOL_NAMES: tuple[str, ...] = (
+    "gravar_endereco_imovel_crm",
+    "registrar_lead_no_crm",
+    "consultar_cep_viacep",
+    "gravar_avaliacao_imovel_rascunho",
+    "search_knowledge_base",
+    "search_google",
+)
+
+
+def _find_balanced_paren_end(s: str, open_paren_idx: int) -> int:
+    """``open_paren_idx`` aponta para ``(``; devolve índice logo após o ``)`` que fecha a chamada."""
+    depth = 0
+    i = open_paren_idx
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if c in ('"', "'", "`"):
+            quote = c
+            i += 1
+            while i < n:
+                if s[i] == "\\":
+                    i = min(i + 2, n)
+                    continue
+                if s[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            continue
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return n
+
+
+def strip_leaked_tool_calls_from_model_text(text: str) -> str:
+    """
+    Remove invocações tipo ``gravar_endereco_imovel_crm(...)`` que o modelo por vezes
+    escreve no texto da resposta — o cliente nunca deve ver chamadas de ferramentas nem JSON de argumentos.
+    """
+    t = text or ""
+    for name in _LEAKED_TOOL_NAMES:
+        while True:
+            idx = t.find(name)
+            if idx < 0:
+                break
+            j = idx + len(name)
+            while j < len(t) and t[j] in " \t\n\r":
+                j += 1
+            if j < len(t) and t[j] == "(":
+                end = _find_balanced_paren_end(t, j)
+                before = t[:idx].rstrip()
+                after = t[end:].lstrip()
+                t = f"{before} {after}".strip()
+            else:
+                t = (t[:idx] + t[j:]).strip()
+                break
+    t = re.sub(r"[ \t]+", " ", t)
+    t = re.sub(r"\n{3,}", "\n\n", t).strip()
+    return t
+
 
 @dataclass(frozen=True)
 class MariaUazParsedReply:
@@ -303,6 +369,9 @@ def parse_maria_reply_for_uaz(raw: str) -> MariaUazParsedReply:
 
     Fallback: triagem em Markdown (3 opções em negrito).
     """
+    raw = strip_leaked_tool_calls_from_model_text(raw)
+    if not (raw or "").strip():
+        raw = "Um momento — já confirmo contigo."
     if _LIST_START in raw and _LIST_END in raw:
         before, rest = raw.split(_LIST_START, 1)
         middle, after = rest.split(_LIST_END, 1)

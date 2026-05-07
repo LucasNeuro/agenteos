@@ -286,6 +286,22 @@ _GREETING_OR_SHORT_CHAT_RE = re.compile(
     r"(?i)^(bom|boa)\s+(dia|tarde|noite)\b|^(oi|ol[aá]|ola|hey)\b"
 )
 
+# Uma palavra curta — debounce rápido ainda faz sentido (evita esperar em «sim» / «oi»).
+_SINGLE_WORD_DEBOUNCE_SHORT_OK = frozenset(
+    {
+        "sim",
+        "nao",
+        "não",
+        "ok",
+        "oi",
+        "ola",
+        "olá",
+        "hey",
+        "ta",
+        "tá",
+    }
+)
+
 
 def maria_text_fragment_prefers_full_debounce(fragment: str) -> bool:
     """
@@ -334,6 +350,13 @@ def maria_text_fragment_prefers_full_debounce(fragment: str) -> bool:
         if _FULL_DEBOUNCE_ACK_RE.match(t):
             return False
         return True
+    if len(parts) == 1:
+        w = low
+        if w in _SINGLE_WORD_DEBOUNCE_SHORT_OK:
+            return False
+        # Bairros e nomes próprios picados («Pirajussara» sozinho, etc.)
+        if len(t) >= 4:
+            return True
     return False
 
 

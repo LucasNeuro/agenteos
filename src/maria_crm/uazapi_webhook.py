@@ -17,6 +17,7 @@ from .config import (
     maria_media_batch_flush_after_sec,
     maria_text_debounce_short_after_sec,
     maria_text_debounce_short_max_chars,
+    maria_text_debounce_tail_sec,
     maria_text_message_debounce_after_sec,
     uazapi_configured,
     uazapi_send_reply_to_incoming_message,
@@ -203,6 +204,9 @@ def _schedule_text_debounce_flush(
 
     def fire() -> None:
         try:
+            tail = maria_text_debounce_tail_sec()
+            if tail > 0:
+                time.sleep(tail)
             with _holding_session_run_gate(sid):
                 with _text_debounce_state_lock:
                     buf = _text_debounce_buffers.pop(sid, None)
@@ -244,7 +248,9 @@ def _schedule_text_debounce_flush(
                     log.warning("[yellow]UAZAPI[/] debounce texto · falha · %s", res.error)
         finally:
             with _webhook_timer_registry_lock:
-                _text_debounce_timers.pop(sid, None)
+                t_left = _text_debounce_timers.pop(sid, None)
+            if t_left is not None:
+                t_left.cancel()
 
     n_frag = 0
     with _text_debounce_state_lock:
@@ -287,8 +293,9 @@ def _schedule_text_debounce_flush(
         _text_debounce_timers[sid] = timer
     timer.start()
     log.info(
-        "[cyan]UAZAPI[/] texto debounce · flush em %.1fs · sessão=%s · fragmentos=%d",
+        "[cyan]UAZAPI[/] texto debounce · flush em %.1fs (+cauda %.2fs) · sessão=%s · fragmentos=%d",
         delay,
+        maria_text_debounce_tail_sec(),
         sid[:24],
         n_frag,
     )
@@ -474,7 +481,9 @@ def _schedule_media_batch_flush(
                     log.warning("[yellow]UAZAPI[/] flush lote · falha · %s", res.error)
         finally:
             with _webhook_timer_registry_lock:
-                _media_batch_flush_timers.pop(sid, None)
+                t_left = _media_batch_flush_timers.pop(sid, None)
+            if t_left is not None:
+                t_left.cancel()
 
     with _webhook_timer_registry_lock:
         old = _media_batch_flush_timers.pop(sid, None)

@@ -214,15 +214,19 @@ def serp_api_configured() -> bool:
 
 def maria_imovel_auto_enrich_enabled() -> bool:
     """
-    Após resposta WhatsApp com rascunho de imóvel + foto válida: pesquisa Serp + gravar avaliação (sem nova mensagem ao cliente).
+    Após resposta WhatsApp com rascunho de imóvel + foto válida: corrida em segundo plano
+    que chama ``gravar_avaliacao_imovel_rascunho`` (sem nova bolha ao cliente).
 
-    Por omissão ligado quando CRM (Supabase) e SERP_API_KEY estão configurados.
-    Defina MARIA_IMOVEL_AUTO_ENRICH_ENABLED=0 para desligar.
+    Por omissão **ligado** quando o CRM (Supabase) está configurado.
+    Se ``SERP_API_KEY`` existir, o modelo pode usar ``search_google``; sem Serp, grava-se
+    só a pré-classificação (visão + contexto) e ``comparacao_mercado_resumo`` vazio ou do texto do cliente.
+
+    Defina ``MARIA_IMOVEL_AUTO_ENRICH_ENABLED=0`` para desligar.
     """
     raw = os.getenv("MARIA_IMOVEL_AUTO_ENRICH_ENABLED", "").strip().lower()
     if raw in ("0", "false", "no", "off"):
         return False
-    if not crm_configured() or not serp_api_configured():
+    if not crm_configured():
         return False
     return True
 
@@ -292,12 +296,28 @@ def maria_text_message_debounce_after_sec() -> float:
     do mesmo chat antes de chamar o agente — agrupa «mensagens picadas» num único turno.
     0 = desligado (cada webhook responde na hora). Máx. 15 s.
     """
-    raw = os.getenv("MARIA_TEXT_DEBOUNCE_SEC", "2.85").strip()
+    raw = os.getenv("MARIA_TEXT_DEBOUNCE_SEC", "3.15").strip()
     try:
         v = float(raw)
     except ValueError:
-        return 2.85
+        return 3.15
     return max(0.0, min(v, 15.0))
+
+
+def maria_text_debounce_tail_sec() -> float:
+    """
+    Margem extra **depois** do debounce principal: antes de esvaziar o buffer, o servidor espera
+    mais estes segundos para a bolha seguinte (ex.: cidade numa linha e bairro na outra com
+    atraso de rede). 0 = desligado. Máx. 2,5 s.
+
+    Ver também ``docs/maria_runtime_env.md`` (secção WhatsApp / debounce).
+    """
+    raw = os.getenv("MARIA_TEXT_DEBOUNCE_TAIL_SEC", "0.55").strip()
+    try:
+        v = float(raw)
+    except ValueError:
+        return 0.55
+    return max(0.0, min(v, 2.5))
 
 
 def maria_text_debounce_short_after_sec() -> float:
