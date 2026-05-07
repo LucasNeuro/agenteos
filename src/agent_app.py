@@ -38,7 +38,7 @@ from agno.os import AgentOS
 from .playbook_loader import load_maria_playbook
 from .maria_crm.knowledge_maria import try_build_maria_knowledge_optional
 from .maria_crm.channel_context import maria_pre_hook_canal_contacto
-from .maria_crm.config import agent_os_tracing_enabled, mem0_api_key, mem0_configured, use_mem0_integration
+from .maria_crm import config as maria_config
 from .maria_crm.imovel_endereco_tool import consultar_cep_viacep, gravar_endereco_imovel_crm
 from .maria_crm.lead_property_link_hook import post_link_maria_imoveis_to_lead
 from .maria_crm.lead_stub_hook import post_ensure_maria_contact_stub_lead
@@ -62,12 +62,12 @@ _ag_post_hooks = [
     post_ensure_maria_contact_stub_lead,
 ]
 
-if use_mem0_integration():
+if maria_config.use_mem0_integration():
     from .maria_crm.mem0_maria import MariaMem0Tools, maria_mem0_post_append_turn, maria_mem0_pre_hook
 
     _ag_tools.append(
         MariaMem0Tools(
-            api_key=mem0_api_key(),
+            api_key=maria_config.mem0_api_key(),
             enable_delete_all_memories=False,
         )
     )
@@ -78,7 +78,7 @@ if use_mem0_integration():
         post_link_maria_imoveis_to_lead,
         post_ensure_maria_contact_stub_lead,
     ]
-elif mem0_configured():
+elif maria_config.mem0_configured():
     get_maria_logger().warning(
         "[yellow]Mem0[/]: [cyan]MEM0_API_KEY[/] definida mas integração desligada "
         "([dim]MARIA_USE_MEM0=0[/]). Não há add/search de memórias — altera para [bold]1[/] ou remove a variável."
@@ -112,7 +112,7 @@ hub_agent = Agent(
 agent_os = AgentOS(
     name="hub-obra-agentos",
     agents=[hub_agent],
-    tracing=agent_os_tracing_enabled(),
+    tracing=maria_config.agent_os_tracing_enabled(),
 )
 
 app = agent_os.get_app()
