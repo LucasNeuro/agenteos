@@ -8,7 +8,12 @@ from typing import Any
 
 import httpx
 
-from .config import uazapi_base_url, uazapi_min_seconds_between_sends, uazapi_token
+from .config import (
+    maria_uazapi_send_readchat_with_message,
+    uazapi_base_url,
+    uazapi_min_seconds_between_sends,
+    uazapi_token,
+)
 from .rich_logging import get_maria_logger
 
 _send_lock = threading.Lock()
@@ -59,10 +64,14 @@ def uaz_send_text(
     text: str,
     *,
     replyid: str | None = None,
-    readchat: bool = True,
+    readchat: bool | None = None,
 ) -> None:
     log = get_maria_logger()
-    body: dict[str, Any] = {"number": number, "text": text, "readchat": readchat}
+    if readchat is None:
+        readchat = maria_uazapi_send_readchat_with_message()
+    body: dict[str, Any] = {"number": number, "text": text}
+    if readchat:
+        body["readchat"] = True
     if replyid:
         body["replyid"] = replyid
     uazapi_post("/send/text", body)
@@ -76,16 +85,19 @@ def uaz_send_button_menu(
     *,
     footer_text: str | None = None,
     replyid: str | None = None,
-    readchat: bool = True,
+    readchat: bool | None = None,
 ) -> None:
     log = get_maria_logger()
+    if readchat is None:
+        readchat = maria_uazapi_send_readchat_with_message()
     body: dict[str, Any] = {
         "number": number,
         "type": "button",
         "text": text,
         "choices": choices,
-        "readchat": readchat,
     }
+    if readchat:
+        body["readchat"] = True
     if footer_text:
         body["footerText"] = footer_text
     if replyid:
@@ -106,18 +118,21 @@ def uaz_send_list_menu(
     *,
     footer_text: str | None = None,
     replyid: str | None = None,
-    readchat: bool = True,
+    readchat: bool | None = None,
 ) -> None:
     """Menu tipo lista (botão estilo *Selecione a unidade* que abre opções — ver doc UAZ ``type: list``)."""
     log = get_maria_logger()
+    if readchat is None:
+        readchat = maria_uazapi_send_readchat_with_message()
     body: dict[str, Any] = {
         "number": number,
         "type": "list",
         "text": text,
         "listButton": list_button.strip() or "Ver opções",
         "choices": choices,
-        "readchat": readchat,
     }
+    if readchat:
+        body["readchat"] = True
     if footer_text:
         body["footerText"] = footer_text
     if replyid:

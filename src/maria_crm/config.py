@@ -240,10 +240,42 @@ def maria_text_message_debounce_after_sec() -> float:
     do mesmo chat antes de chamar o agente — agrupa «mensagens picadas» num único turno.
     0 = desligado (cada webhook responde na hora). Máx. 15 s.
     """
-    raw = os.getenv("MARIA_TEXT_DEBOUNCE_SEC", "2.5").strip()
+    raw = os.getenv("MARIA_TEXT_DEBOUNCE_SEC", "1.25").strip()
     try:
         v = float(raw)
     except ValueError:
-        return 2.5
+        return 1.25
     return max(0.0, min(v, 15.0))
+
+
+def maria_text_debounce_short_after_sec() -> float:
+    """
+    Com debounce ligado: se ainda há **um único** fragmento curto (ver `maria_text_debounce_short_max_chars()`),
+    usa este limite **inferior** ao debounce «longo» para responder mais depressa a «Olá» / «Oi» soltos.
+    0 = desligar caminho rápido (usa sempre o debounce longo).
+    """
+    raw = os.getenv("MARIA_TEXT_DEBOUNCE_SHORT_SEC", "0.55").strip()
+    try:
+        v = float(raw)
+    except ValueError:
+        return 0.55
+    return max(0.0, min(v, 5.0))
+
+
+def maria_text_debounce_short_max_chars() -> int:
+    """Tamanho máximo (caracteres, após strip) do único fragmento para qualificar ao debounce curto."""
+    raw = os.getenv("MARIA_TEXT_DEBOUNCE_SHORT_CHARS", "40").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return 40
+    return max(8, min(n, 160))
+
+
+def maria_uazapi_send_readchat_with_message() -> bool:
+    """
+    Se false, omite ``readchat`` nos POST /send/text e /send/menu (quando a UAZ aceitar body sem o campo).
+    Por omissão true — marcar conversa como lida pode acrescentar latência no provedor; testar ``0`` se parecer lento.
+    """
+    return os.getenv("MARIA_UAZAPI_SEND_READCHAT", "1").strip().lower() not in ("0", "false", "no", "off")
 

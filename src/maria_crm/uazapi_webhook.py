@@ -15,6 +15,8 @@ from fastapi import APIRouter, Body, Header, Response, status
 
 from .config import (
     maria_media_batch_flush_after_sec,
+    maria_text_debounce_short_after_sec,
+    maria_text_debounce_short_max_chars,
     maria_text_message_debounce_after_sec,
     uazapi_configured,
     uazapi_send_reply_to_incoming_message,
@@ -192,8 +194,8 @@ def _schedule_text_debounce_flush(
     media_ingest: Any | None,
     log: Any,
 ) -> None:
-    delay = maria_text_message_debounce_after_sec()
-    if delay <= 0:
+    full_delay = maria_text_message_debounce_after_sec()
+    if full_delay <= 0:
         return
     sid = str(session_id)
 
@@ -259,6 +261,18 @@ def _schedule_text_debounce_flush(
         buf.updated_at_monotonic = now
         _text_debounce_buffers[sid] = buf
         n_frag = len(buf.fragments)
+        single_short = (
+            n_frag == 1
+            and not buf.media_ingests
+            and bool(buf.fragments)
+            and len((buf.fragments[0] or "").strip()) <= maria_text_debounce_short_max_chars()
+        )
+
+    short_w = maria_text_debounce_short_after_sec()
+    if single_short and short_w > 0:
+        delay = min(full_delay, short_w)
+    else:
+        delay = full_delay
 
     with _webhook_timer_registry_lock:
         old = _text_debounce_timers.pop(sid, None)
